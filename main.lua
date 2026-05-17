@@ -195,9 +195,15 @@ function GrimmorySync:addToMainMenu(menu_items)
         sorting_hint = "search",
         sub_item_table = {
             {
-                text = _("Sync now"),
+                text = _("Sync missing books"),
                 callback = function()
                     self:startSync()
+                end,
+            },
+            {
+                text = _("Refresh existing metadata"),
+                callback = function()
+                    self:startMetadataRefresh()
                 end,
             },
             {
@@ -887,60 +893,71 @@ function GrimmorySync:normalizeForComparison(str)
     return str
 end
 
-function GrimmorySync:compareAndDownload(local_books, remote_books)
-    -- Build a lookup table of all local filenames (just the filename, not full path)
-    local local_lookup = {}
-    local local_files_list = {}
-    
+function GrimmorySync:buildLocalBookIndex(local_books)
+    local index = {
+        lookup = {},
+        files = {},
+    }
+
     for _, book in ipairs(local_books) do
         -- Extract just the filename from the path (could be nested like "Author - Series/1 - Title.epub")
         local filename = book.filename:match("([^/]+)$") or book.filename
         local normalized = self:normalizeForComparison(filename)
-        local_lookup[normalized] = true
-        table.insert(local_files_list, normalized)
+        index.lookup[normalized] = book
+        table.insert(index.files, {
+            normalized = normalized,
+            book = book,
+        })
         logger.info("[GrimmorySync] Local file:", normalized)
     end
-    
+
+    return index
+end
+
+function GrimmorySync:findLocalMatch(remote, local_index)
+    local possible_names = self:generatePossibleFilenames(remote)
+
+    logger.info("[GrimmorySync] Checking remote book:", remote.title, "author:", remote.author or "none", "series:", remote.series or "none")
+    for idx, pname in ipairs(possible_names) do
+        logger.info("[GrimmorySync]   Possible name", idx, ":", pname)
+    end
+
+    for _, name in ipairs(possible_names) do
+        local normalized = self:normalizeForComparison(name)
+        local exact_match = local_index.lookup[normalized]
+
+        if exact_match then
+            return exact_match, name, false
+        end
+
+        -- Fuzzy match for title-only (when author is missing).
+        if normalized:match("^ %-") then
+            local pattern = normalized:gsub("^ %- ", ".* %- ")
+            for _, local_file in ipairs(local_index.files) do
+                if local_file.normalized:match(pattern .. "$") then
+                    return local_file.book, local_file.normalized, true
+                end
+            end
+        end
+    end
+
+    return nil, nil, false
+end
+
+function GrimmorySync:compareAndDownload(local_books, remote_books)
+    local local_index = self:buildLocalBookIndex(local_books)
+
     local missing = {}
     for _, remote in ipairs(remote_books) do
-        local matched = false
-        
-        -- Generate all possible filenames for this book
-        local possible_names = self:generatePossibleFilenames(remote)
-        
-        logger.info("[GrimmorySync] Checking remote book:", remote.title, "author:", remote.author or "none", "series:", remote.series or "none")
-        for idx, pname in ipairs(possible_names) do
-            logger.info("[GrimmorySync]   Possible name", idx, ":", pname)
-        end
-        
-        -- Check if any of them exist locally
-        for _, name in ipairs(possible_names) do
-            local normalized = self:normalizeForComparison(name)
-            
-            -- Exact match
-            if local_lookup[normalized] then
-                logger.info("[GrimmorySync] Already have:", remote.title, "(matched:", name, ")")
-                matched = true
-                break
+        local matched_book, matched_name, fuzzy = self:findLocalMatch(remote, local_index)
+
+        if matched_book then
+            if fuzzy then
+                logger.info("[GrimmorySync] Already have:", remote.title, "(fuzzy matched:", matched_name, ")")
+            else
+                logger.info("[GrimmorySync] Already have:", remote.title, "(matched:", matched_name, ")")
             end
-            
-            -- Fuzzy match for title-only (when author is missing)
-            -- Check if normalized name ends with " - Title.epub" pattern
-            if normalized:match("^ %-") then
-                -- This is a pattern like " - Akira, Vol. 1.epub"
-                -- Check if any local file ends with this pattern
-                for _, local_file in ipairs(local_files_list) do
-                    if local_file:match(normalized:gsub("^ %- ", ".* %- ") .. "$") then
-                        logger.info("[GrimmorySync] Already have:", remote.title, "(fuzzy matched:", local_file, ")")
-                        matched = true
-                        break
-                    end
-                end
-                if matched then break end
-            end
-        end
-        
-        if not matched then
+        else
             logger.info("[GrimmorySync] Missing book:", remote.title)
             table.insert(missing, remote)
         end
@@ -972,6 +989,51 @@ function GrimmorySync:compareAndDownload(local_books, remote_books)
     return count, nil
 end
 
+function GrimmorySync:refreshExistingMetadata(local_books, remote_books)
+    local local_index = self:buildLocalBookIndex(local_books)
+    local matched = {}
+
+    for _, remote in ipairs(remote_books) do
+        local matched_book, matched_name, fuzzy = self:findLocalMatch(remote, local_index)
+        if matched_book and matched_book.path then
+            if fuzzy then
+                logger.info("[GrimmorySync] Will refresh:", remote.title, "(fuzzy matched:", matched_name, ")")
+            else
+                logger.info("[GrimmorySync] Will refresh:", remote.title, "(matched:", matched_name, ")")
+            end
+            table.insert(matched, {
+                remote = remote,
+                local_path = matched_book.path,
+            })
+        end
+    end
+
+    if #matched == 0 then
+        return 0, nil
+    end
+
+    local count = 0
+    for i, item in ipairs(matched) do
+        if self.abort_sync then
+            logger.info("[GrimmorySync] Metadata refresh aborted by user")
+            return count, nil
+        end
+
+        self:showProgressDialog(string.format(
+            "Uppdaterar metadata %d av %d...\n\n%s\n\nTryck för att avbryta",
+            i,
+            #matched,
+            item.remote.title
+        ))
+
+        if self:downloadBook(item.remote, item.local_path, { record_history = false }) then
+            count = count + 1
+        end
+    end
+
+    return count, nil
+end
+
 function GrimmorySync:buildCalibrePath(book)
     -- Simply use generatePossibleFilenames to get the single unified format
     local possible = self:generatePossibleFilenames(book)
@@ -981,7 +1043,9 @@ function GrimmorySync:buildCalibrePath(book)
     return full_path, self.local_path, filename
 end
 
-function GrimmorySync:downloadBook(book)
+function GrimmorySync:downloadBook(book, target_path, options)
+    options = options or {}
+
     local ok_http, http = pcall(require, "socket.http")
     local ok_https, https = pcall(require, "ssl.https")
     local ok_ltn12, ltn12 = pcall(require, "ltn12")
@@ -998,26 +1062,7 @@ function GrimmorySync:downloadBook(book)
     end
     
     logger.info("[GrimmorySync] Downloading:", book.title)
-    
-    -- Generate target directory path based on genres/series
-    local target_subdir = self:generateTargetPath(book)
-    
-    -- Generate all possible filenames and use the first one as default
-    -- This ensures downloaded files match what we search for
-    local possible_names = self:generatePossibleFilenames(book)
-    local filename_only = possible_names[1] or (book.title .. ".epub")
-    
-    -- Combine subdirectory and filename
-    local default_filename
-    if target_subdir and target_subdir ~= "" then
-        default_filename = target_subdir .. "/" .. filename_only
-    else
-        -- No subdirectory, place directly in ePubs root
-        default_filename = filename_only
-    end
-    
-    logger.info("[GrimmorySync] Target path:", default_filename)
-    
+
     -- Create directory structure recursively
     local function ensureDir(path)
         -- Handle absolute paths (starting with /)
@@ -1051,20 +1096,40 @@ function GrimmorySync:downloadBook(book)
         end
         return true
     end
-    
+
     -- Determine full path
-    local full_path, dir_path
-    if default_filename:match("/") then
-        -- Filename includes subdirectory
-        full_path = self.local_path .. "/" .. default_filename
+    local full_path, dir_path, display_path
+    if target_path and target_path ~= "" then
+        full_path = target_path
         dir_path = full_path:match("(.+)/[^/]+$") or self.local_path
+        display_path = full_path
     else
-        -- Simple filename
-        full_path = self.local_path .. "/" .. default_filename
-        dir_path = self.local_path
+        -- Generate target directory path based on genres/series
+        local target_subdir = self:generateTargetPath(book)
+
+        -- Generate all possible filenames and use the first one as default
+        -- This ensures downloaded files match what we search for
+        local possible_names = self:generatePossibleFilenames(book)
+        local filename_only = possible_names[1] or (book.title .. ".epub")
+
+        -- Combine subdirectory and filename
+        if target_subdir and target_subdir ~= "" then
+            display_path = target_subdir .. "/" .. filename_only
+        else
+            display_path = filename_only
+        end
+
+        if display_path:match("/") then
+            full_path = self.local_path .. "/" .. display_path
+            dir_path = full_path:match("(.+)/[^/]+$") or self.local_path
+        else
+            full_path = self.local_path .. "/" .. display_path
+            dir_path = self.local_path
+        end
     end
-    logger.info("[GrimmorySync] Using generated filename:", default_filename)
-    
+
+    logger.info("[GrimmorySync] Target path:", display_path)
+
     -- Create directories
     if not ensureDir(dir_path) then
         return false
@@ -1081,10 +1146,15 @@ function GrimmorySync:downloadBook(book)
         headers["authorization"] = "Basic " .. mime.b64(self.username .. ":" .. self.password)
     end
     
-    -- Open file for writing
-    local file = io.open(full_path, "wb")
+    local tmp_path = full_path .. ".grimmorytmp"
+    local backup_path = full_path .. ".grimmorybak"
+    pcall(os.remove, tmp_path)
+    pcall(os.remove, backup_path)
+
+    -- Open a temporary file first so failed downloads do not corrupt the existing EPUB.
+    local file = io.open(tmp_path, "wb")
     if not file then
-        logger.err("[GrimmorySync] Cannot create:", full_path)
+        logger.err("[GrimmorySync] Cannot create:", tmp_path)
         return false
     end
     
@@ -1102,20 +1172,46 @@ function GrimmorySync:downloadBook(book)
     -- Check result
     if not success or (type(status_code) == "number" and status_code ~= 200) then
         logger.err("[GrimmorySync] Download failed:", status_code or "unknown error")
-        pcall(os.remove, full_path)
+        pcall(os.remove, tmp_path)
         return false
     end
     
     -- Verify file was created and has content
-    local attr = lfs.attributes(full_path)
+    local attr = lfs.attributes(tmp_path)
     if not attr or attr.size == 0 then
         logger.err("[GrimmorySync] Downloaded file is empty or missing")
-        pcall(os.remove, full_path)
+        pcall(os.remove, tmp_path)
         return false
     end
-    
+
+    local existing_attr = lfs.attributes(full_path)
+    if existing_attr then
+        local ok_rename, rename_err = os.rename(full_path, backup_path)
+        if not ok_rename then
+            logger.err("[GrimmorySync] Cannot backup existing file:", full_path, "error:", rename_err or "unknown")
+            pcall(os.remove, tmp_path)
+            return false
+        end
+    end
+
+    local ok_replace, replace_err = os.rename(tmp_path, full_path)
+    if not ok_replace then
+        logger.err("[GrimmorySync] Cannot move downloaded file into place:", full_path, "error:", replace_err or "unknown")
+        if existing_attr then
+            pcall(os.rename, backup_path, full_path)
+        end
+        pcall(os.remove, tmp_path)
+        return false
+    end
+
+    if existing_attr then
+        pcall(os.remove, backup_path)
+    end
+
     logger.info("[GrimmorySync] OK:", book.title, "(" .. attr.size .. " bytes)")
-    self:recordDownload(book, full_path)
+    if options.record_history ~= false then
+        self:recordDownload(book, full_path)
+    end
     return true
 end
 
@@ -1157,11 +1253,35 @@ function GrimmorySync:startSync()
     
     -- Show confirmation with cancel option
     UIManager:show(ConfirmBox:new{
-        text = _("Start synkronisering?\n\nDu kan avbryta när som helst."),
+        text = _("Synka saknade böcker?\n\nEndast böcker som saknas på enheten laddas ner. Du kan avbryta när som helst."),
         ok_text = _("Starta"),
         cancel_text = _("Avbryt"),
         ok_callback = function()
             self:performSync()
+        end,
+    })
+end
+
+function GrimmorySync:startMetadataRefresh()
+    if self.server_url == "" then
+        UIManager:show(ConfirmBox:new{
+            text = _("Server not configured!\n\nConfigure now?"),
+            ok_text = _("Configure"),
+            ok_callback = function()
+                self:showServerConfig()
+            end,
+        })
+        return
+    end
+
+    self.abort_sync = false
+
+    UIManager:show(ConfirmBox:new{
+        text = _("Uppdatera metadata i befintliga böcker?\n\nPluginet laddar om matchade EPUB-filer från Grimmory och ersätter lokala filer först efter att nedladdningen har verifierats. Saknade böcker laddas inte ner här."),
+        ok_text = _("Uppdatera"),
+        cancel_text = _("Avbryt"),
+        ok_callback = function()
+            self:performMetadataRefresh()
         end,
     })
 end
@@ -1242,12 +1362,103 @@ function GrimmorySync:performSync()
     
     local stats = count_or_err
     local message = string.format(
-        "✓ Synk klar!\n\nLokala: %d böcker\nServern: %d böcker\nNedladdade: %d böcker",
+        "✓ Synk klar!\n\nLokala: %d böcker\nServern: %d böcker\nNedladdade saknade: %d böcker",
         stats.local_count or 0,
         stats.remote_count or 0,
         stats.downloaded or 0
     )
     
+    UIManager:show(InfoMessage:new{
+        text = message,
+        timeout = 5,
+    })
+end
+
+function GrimmorySync:performMetadataRefresh()
+    self:showProgressDialog("Skannar lokala böcker...")
+
+    local ok, success, count_or_err = pcall(function()
+        UIManager:scheduleIn(0.1, function()
+            if self.progress_dialog then
+                self.progress_dialog.dismiss_callback = function()
+                    self.abort_sync = true
+                    self:closeProgressDialog()
+                    UIManager:show(InfoMessage:new{
+                        text = _("Metadatauppdatering avbruten"),
+                        timeout = 2,
+                    })
+                end
+            end
+        end)
+
+        local local_books = self:scanLocalBooks()
+        logger.info("[GrimmorySync] Local books found:", #local_books)
+
+        if self.abort_sync then
+            return false, "Avbruten"
+        end
+
+        self:showProgressDialog(string.format(
+            "Hämtar böcker från server...\n\nLokala böcker: %d\n\nTryck för att avbryta",
+            #local_books
+        ))
+
+        local remote_books, err = self:fetchBooklistFromGrimmory()
+
+        if not remote_books then
+            return false, err
+        end
+
+        if self.abort_sync then
+            return false, "Avbruten"
+        end
+
+        logger.info("[GrimmorySync] Remote books found:", #remote_books)
+
+        self:showProgressDialog(string.format(
+            "Matchar befintliga böcker...\n\nLokala: %d\nServern: %d\n\nTryck för att avbryta",
+            #local_books,
+            #remote_books
+        ))
+
+        local count, refresh_err = self:refreshExistingMetadata(local_books, remote_books)
+        if refresh_err then
+            return false, refresh_err
+        end
+
+        return true, { refreshed = count, local_count = #local_books, remote_count = #remote_books }
+    end)
+
+    self:closeProgressDialog()
+
+    if not ok then
+        UIManager:show(InfoMessage:new{
+            text = _("Metadata refresh error: ") .. tostring(success),
+            timeout = 5,
+        })
+        logger.err("[GrimmorySync] Metadata refresh error:", success)
+        return
+    end
+
+    if not success then
+        if count_or_err ~= "Avbruten" then
+            UIManager:show(InfoMessage:new{
+                text = _("Error: ") .. tostring(count_or_err),
+                timeout = 5,
+            })
+            logger.err("[GrimmorySync] Metadata refresh error:", count_or_err)
+        end
+        return
+    end
+
+    local stats = count_or_err
+    local message = string.format(
+        "✓ Metadata uppdaterad!\n\nLokala: %d böcker\nServern: %d böcker\nUppdaterade: %d böcker",
+        stats.local_count or 0,
+        stats.remote_count or 0,
+        stats.refreshed or 0
+    )
+
     UIManager:show(InfoMessage:new{
         text = message,
         timeout = 5,

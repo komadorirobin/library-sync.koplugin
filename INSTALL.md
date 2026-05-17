@@ -76,7 +76,7 @@ När pluginet syns i menyn:
 1. **Gå till: Meny → Verktyg → Grimmory Sync → Konfigurera server**
 2. Ange din Macs IP-adress och port (t.ex. `http://192.168.1.100:6060`)
 3. Ange användarnamn och lösenord för Grimmory
-4. **Gå till: Meny → Verktyg → Grimmory Sync → Synka nu**
+4. **Gå till: Meny → Verktyg → Grimmory Sync → Sync missing books**
 5. Vänta medan pluginet laddar ner dina böcker! 📚
 
 ## ℹ️ Hitta din Macs IP-adress

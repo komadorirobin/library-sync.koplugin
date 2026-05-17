@@ -1,6 +1,6 @@
 # Grimmory Sync for KOReader
 
-A KOReader plugin that syncs books from a Grimmory OPDS server to a local device library. It scans the local library, compares filenames with the remote OPDS catalogue, and downloads books that are missing on the device.
+A KOReader plugin that syncs books from a Grimmory OPDS server to a local device library. It scans the local library, compares filenames with the remote OPDS catalogue, downloads books that are missing on the device, and can refresh existing EPUB files when metadata has changed in Grimmory.
 
 ## Features
 
@@ -8,6 +8,7 @@ A KOReader plugin that syncs books from a Grimmory OPDS server to a local device
 - OPDS catalogue pagination support.
 - Basic-auth support for protected Grimmory instances.
 - Automatic downloads for missing books.
+- Manual metadata refresh for existing local books by safely re-downloading matched EPUB files.
 - Folder placement based on Grimmory genres/tags, including Manga, Serier, Light novels, Fiktion, Facklitteratur, and Lyrik.
 - Recent-download history with quick open from KOReader.
 
@@ -47,10 +48,10 @@ Credentials are stored locally in KOReader's storage as plain text because this 
 
 ## Usage
 
-Run:
+To download books that exist in Grimmory but are missing locally, run:
 
 ```text
-Menu -> Tools -> Grimmory Sync -> Sync now
+Menu -> Tools -> Grimmory Sync -> Sync missing books
 ```
 
 The plugin will:
@@ -59,6 +60,14 @@ The plugin will:
 2. Fetch the Grimmory OPDS catalogue.
 3. Compare remote books to local filenames.
 4. Download missing books into the configured library path.
+
+To refresh descriptions and other metadata that Grimmory has written into existing EPUB files, run:
+
+```text
+Menu -> Tools -> Grimmory Sync -> Refresh existing metadata
+```
+
+This replaces matched local EPUB files with freshly downloaded copies from Grimmory. The replacement is conservative: the plugin downloads to a temporary file, verifies that it is not empty, backs up the existing file, and only then moves the new file into place.
 
 Downloaded files are named as:
 
@@ -72,6 +81,7 @@ Books are placed into subfolders according to tags/genres returned by the OPDS f
 
 - The current download implementation prefers EPUB acquisition links.
 - Local matching is filename-based and intentionally fuzzy around common punctuation and accents.
+- Metadata refresh currently refreshes all matched local books. It does not yet compare per-book metadata hashes or `updated` timestamps.
 - The folder placement rules are tailored for a Swedish personal library layout. Adjust `generateTargetPath()` if your taxonomy differs.
 - KOReader must have network access to the Grimmory server.
 - Existing `booklore_sync_settings.txt` and `booklore_sync_history.lua` files are read as legacy fallbacks, but new saves use `grimmory_sync_*` files.
