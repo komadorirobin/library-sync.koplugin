@@ -1,4 +1,4 @@
-# Snabbinstallation för Booklore Sync Plugin
+# Snabbinstallation för Grimmory Sync Plugin
 
 ## 📋 Checklista
 
@@ -6,7 +6,7 @@ Följ dessa steg exakt:
 
 ### 1. Förbered pluginet på din dator
 
-✅ Kontrollera att du har mappen: `booklore-sync.koplugin/`  
+✅ Kontrollera att du har mappen: `grimmory-sync.koplugin/`
 ✅ Mappen innehåller minst: `_meta.lua` och `main.lua`
 
 ### 2. Installera på Bigme B7 Pro
@@ -23,11 +23,11 @@ Följ dessa steg exakt:
    - Om `plugins` inte finns, skapa den
 
 3. **Kopiera pluginet**
-   - Kopiera HELA mappen `booklore-sync.koplugin` till `koreader/plugins/`
+   - Kopiera HELA mappen `grimmory-sync.koplugin` till `koreader/plugins/`
    - Den fullständiga sökvägen ska bli:
      ```
-     /storage/emulated/0/koreader/plugins/booklore-sync.koplugin/_meta.lua
-     /storage/emulated/0/koreader/plugins/booklore-sync.koplugin/main.lua
+     /storage/emulated/0/koreader/plugins/grimmory-sync.koplugin/_meta.lua
+     /storage/emulated/0/koreader/plugins/grimmory-sync.koplugin/main.lua
      ```
 
 4. **Koppla från USB**
@@ -37,7 +37,7 @@ Följ dessa steg exakt:
 ```bash
 # Aktivera USB-debugging på Bigme först
 adb devices
-adb push booklore-sync.koplugin /storage/emulated/0/koreader/plugins/
+adb push grimmory-sync.koplugin /storage/emulated/0/koreader/plugins/
 ```
 
 ### 3. Starta om KOReader
@@ -53,9 +53,9 @@ adb push booklore-sync.koplugin /storage/emulated/0/koreader/plugins/
 1. Öppna KOReader
 2. Tryck på menyikonen (☰) överst till vänster
 3. Scrolla ner till **"Verktyg"** / **"Tools"**
-4. Du bör se **"Booklore Sync"** i listan
+4. Du bör se **"Grimmory Sync"** i listan
 
-Om du INTE ser "Booklore Sync":
+Om du INTE ser "Grimmory Sync":
 - ✅ Kontrollera att mappen verkligen heter `.koplugin` (inte `.koplugin.koplugin`)
 - ✅ Kontrollera att filerna ligger direkt i mappen (inte i en undermapp)
 - ✅ Starta om KOReader igen
@@ -66,17 +66,17 @@ Om du INTE ser "Booklore Sync":
 1. Använd en filhanterare på Bigme
 2. Gå till: `/storage/emulated/0/koreader/`
 3. Öppna `crash.log` med en textläsare
-4. Leta efter rader med `[BookloreSync]` eller `bookloremync`
+4. Leta efter rader med `[GrimmorySync]` eller `grimmorysync`
 5. Om du ser felmeddelanden, kopiera dem och dela med utvecklaren
 
 ## 🚀 Första gången
 
 När pluginet syns i menyn:
 
-1. **Gå till: Meny → Verktyg → Booklore Sync → Konfigurera server**
+1. **Gå till: Meny → Verktyg → Grimmory Sync → Konfigurera server**
 2. Ange din Macs IP-adress och port (t.ex. `http://192.168.1.100:6060`)
-3. Ange användarnamn och lösenord för Booklore
-4. **Gå till: Meny → Verktyg → Booklore Sync → Synka nu**
+3. Ange användarnamn och lösenord för Grimmory
+4. **Gå till: Meny → Verktyg → Grimmory Sync → Synka nu**
 5. Vänta medan pluginet laddar ner dina böcker! 📚
 
 ## ℹ️ Hitta din Macs IP-adress

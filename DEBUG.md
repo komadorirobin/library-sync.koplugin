@@ -7,7 +7,7 @@ Kontrollera att du har EXAKT denna struktur på din e-läsare:
 ```
 /koreader/
   └── plugins/
-      └── booklore-sync.koplugin/
+      └── grimmory-sync.koplugin/
           ├── _meta.lua
           ├── main.lua
           ├── README.md
@@ -15,7 +15,7 @@ Kontrollera att du har EXAKT denna struktur på din e-läsare:
           └── DEBUG.md (denna fil)
 ```
 
-**VIKTIGT:** Mappen MÅSTE heta `booklore-sync.koplugin` (med punkten före koplugin)
+**VIKTIGT:** Mappen MÅSTE heta `grimmory-sync.koplugin` (med punkten före koplugin)
 
 ## Steg 2: Testa med minimal version
 
@@ -27,7 +27,7 @@ Kontrollera att du har EXAKT denna struktur på din e-läsare:
    - Stäng KOReader HELT
    - Öppna KOReader igen
 
-3. **Kolla om "Booklore Sync (TEST)" syns i menyn**
+3. **Kolla om "Grimmory Sync (TEST)" syns i menyn**
    - Om JA → Pluginet fungerar, problemet är i huvudkoden
    - Om NEJ → Gå till Steg 3
 
@@ -37,17 +37,17 @@ KOReader kan leta på olika platser beroende på installation:
 
 ### Alternativ A: Intern lagring
 ```
-/storage/emulated/0/koreader/plugins/booklore-sync.koplugin/
+/storage/emulated/0/koreader/plugins/grimmory-sync.koplugin/
 ```
 
 ### Alternativ B: Appens datamapp
 ```
-/data/data/org.koreader.launcher/files/koreader/plugins/booklore-sync.koplugin/
+/data/data/org.koreader.launcher/files/koreader/plugins/grimmory-sync.koplugin/
 ```
 
 ### Alternativ C: SD-kort (om du har)
 ```
-/storage/sdcard1/koreader/plugins/booklore-sync.koplugin/
+/storage/sdcard1/koreader/plugins/grimmory-sync.koplugin/
 ```
 
 ## Steg 4: Hitta rätt plats via KOReader
@@ -78,7 +78,7 @@ Om du har tillgång till en terminal på Bigme:
 
 ```bash
 # Testa Lua-syntax
-cd /koreader/plugins/booklore-sync.koplugin/
+cd /koreader/plugins/grimmory-sync.koplugin/
 luac -p main.lua
 
 # Om fel, byt till minimal version:
@@ -92,8 +92,8 @@ mv test-minimal.lua main.lua
 2. Med filhanterare, gå till `/koreader/` 
 3. Öppna `crash.log` med textläsare
 4. Leta efter:
-   - `bookloresync`
-   - `booklore-sync.koplugin`
+   - `grimmorysync`
+   - `grimmory-sync.koplugin`
    - `error` eller `failed`
 
 **Vanliga fel du kan se:**
@@ -122,7 +122,7 @@ Om ingenting fungerar, prova denna metod:
 
 3. **Exempel:**
    - Om du hittar: `/data/media/0/koreader/plugins/statistics.koplugin/`
-   - Kopiera din mapp till: `/data/media/0/koreader/plugins/booklore-sync.koplugin/`
+   - Kopiera din mapp till: `/data/media/0/koreader/plugins/grimmory-sync.koplugin/`
 
 ## Steg 9: ADB-metoden (Avancerat)
 
@@ -134,7 +134,7 @@ adb shell find /sdcard -name "*.koplugin" -type d 2>/dev/null
 adb shell find /storage -name "*.koplugin" -type d 2>/dev/null
 
 # Kopiera dit
-adb push booklore-sync.koplugin /RÄTT/PLATS/plugins/
+adb push grimmory-sync.koplugin /RÄTT/PLATS/plugins/
 
 # Starta om KOReader
 adb shell am force-stop org.koreader.launcher
@@ -155,7 +155,7 @@ Om INGENTING fungerar, testa:
 
 Bocka av när du gjort:
 
-- [ ] Verifierat mappnamnet: `booklore-sync.koplugin` (med .koplugin)
+- [ ] Verifierat mappnamnet: `grimmory-sync.koplugin` (med .koplugin)
 - [ ] Verifierat att `_meta.lua` och `main.lua` finns i mappen
 - [ ] Startat om KOReader (inte bara stängt en bok)
 - [ ] Testat minimal version (`test-minimal.lua` → `main.lua`)

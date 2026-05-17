@@ -7,18 +7,20 @@ local logger = require("logger")
 local _ = require("gettext")
 local dump = require("dump")
 
-local BookloreSync = WidgetContainer:new{
-    name = "bookloresync",
+local GrimmorySync = WidgetContainer:new{
+    name = "grimmorysync",
     is_doc_only = false,
     abort_sync = false,
 }
 
-local SETTINGS_FILE = "/storage/emulated/0/koreader/booklore_sync_settings.txt"
-local HISTORY_FILE = "/storage/emulated/0/koreader/booklore_sync_history.lua"
+local SETTINGS_FILE = "/storage/emulated/0/koreader/grimmory_sync_settings.txt"
+local LEGACY_SETTINGS_FILE = "/storage/emulated/0/koreader/booklore_sync_settings.txt"
+local HISTORY_FILE = "/storage/emulated/0/koreader/grimmory_sync_history.lua"
+local LEGACY_HISTORY_FILE = "/storage/emulated/0/koreader/booklore_sync_history.lua"
 local MAX_HISTORY = 15
 
-function BookloreSync:loadSettings()
-    local file = io.open(SETTINGS_FILE, "r")
+function GrimmorySync:loadSettings()
+    local file = io.open(SETTINGS_FILE, "r") or io.open(LEGACY_SETTINGS_FILE, "r")
     if not file then
         return {
             server_url = "",
@@ -45,10 +47,10 @@ function BookloreSync:loadSettings()
     }
 end
 
-function BookloreSync:saveSettings()
+function GrimmorySync:saveSettings()
     local file = io.open(SETTINGS_FILE, "w")
     if not file then
-        logger.warn("[BookloreSync] Cannot save settings")
+        logger.warn("[GrimmorySync] Cannot save settings")
         return
     end
     
@@ -59,25 +61,31 @@ function BookloreSync:saveSettings()
     file:close()
 end
 
-function BookloreSync:loadHistory()
+function GrimmorySync:loadHistory()
     local ok, history = pcall(dofile, HISTORY_FILE)
     if ok and type(history) == "table" then
         return history
     end
+
+    ok, history = pcall(dofile, LEGACY_HISTORY_FILE)
+    if ok and type(history) == "table" then
+        return history
+    end
+
     return {}
 end
 
-function BookloreSync:saveHistory(history)
+function GrimmorySync:saveHistory(history)
     local file = io.open(HISTORY_FILE, "w")
     if not file then
-        logger.warn("[BookloreSync] Cannot save history")
+        logger.warn("[GrimmorySync] Cannot save history")
         return
     end
     file:write("return " .. dump(history) .. "\n")
     file:close()
 end
 
-function BookloreSync:recordDownload(book, file_path)
+function GrimmorySync:recordDownload(book, file_path)
     local history = self:loadHistory()
     table.insert(history, 1, {
         timestamp = os.time(),
@@ -92,7 +100,7 @@ function BookloreSync:recordDownload(book, file_path)
     self:saveHistory(history)
 end
 
-function BookloreSync:getRecentBooksMenu()
+function GrimmorySync:getRecentBooksMenu()
     local history = self:loadHistory()
 
     if #history == 0 then
@@ -147,7 +155,7 @@ function BookloreSync:getRecentBooksMenu()
     return items
 end
 
-function BookloreSync:openRecentBook(entry)
+function GrimmorySync:openRecentBook(entry)
     local ok_lfs, lfs = pcall(require, "libs/libkoreader-lfs")
     if not ok_lfs then
         UIManager:show(InfoMessage:new{
@@ -169,7 +177,7 @@ function BookloreSync:openRecentBook(entry)
     end
 end
 
-function BookloreSync:init()
+function GrimmorySync:init()
     if self.ui and self.ui.menu then
         self.ui.menu:registerToMainMenu(self)
     end
@@ -181,9 +189,9 @@ function BookloreSync:init()
     self.local_path = settings.local_path
 end
 
-function BookloreSync:addToMainMenu(menu_items)
-    menu_items.booklore_sync = {
-        text = _("Booklore Sync"),
+function GrimmorySync:addToMainMenu(menu_items)
+    menu_items.grimmory_sync = {
+        text = _("Grimmory Sync"),
         sorting_hint = "search",
         sub_item_table = {
             {
@@ -214,10 +222,10 @@ function BookloreSync:addToMainMenu(menu_items)
     }
 end
 
-function BookloreSync:showServerConfig()
+function GrimmorySync:showServerConfig()
     local input_dialog
     input_dialog = InputDialog:new{
-        title = _("Booklore Server URL"),
+        title = _("Grimmory Server URL"),
         input = self.server_url,
         input_hint = "http://192.168.1.100:6060",
         input_type = "text",
@@ -244,7 +252,7 @@ function BookloreSync:showServerConfig()
     input_dialog:onShowKeyboard()
 end
 
-function BookloreSync:showUsernameConfig()
+function GrimmorySync:showUsernameConfig()
     local input_dialog
     input_dialog = InputDialog:new{
         title = _("Username (optional)"),
@@ -274,7 +282,7 @@ function BookloreSync:showUsernameConfig()
     input_dialog:onShowKeyboard()
 end
 
-function BookloreSync:showPasswordConfig()
+function GrimmorySync:showPasswordConfig()
     local input_dialog
     input_dialog = InputDialog:new{
         title = _("Password (optional)"),
@@ -305,7 +313,7 @@ function BookloreSync:showPasswordConfig()
     input_dialog:onShowKeyboard()
 end
 
-function BookloreSync:showPathConfig()
+function GrimmorySync:showPathConfig()
     local input_dialog
     input_dialog = InputDialog:new{
         title = _("Local book path"),
@@ -341,10 +349,10 @@ function BookloreSync:showPathConfig()
     input_dialog:onShowKeyboard()
 end
 
-function BookloreSync:scanLocalBooks()
+function GrimmorySync:scanLocalBooks()
     local ok_lfs, lfs = pcall(require, "libs/libkoreader-lfs")
     if not ok_lfs then
-        logger.err("[BookloreSync] Cannot load lfs")
+        logger.err("[GrimmorySync] Cannot load lfs")
         return {}
     end
     
@@ -383,11 +391,11 @@ function BookloreSync:scanLocalBooks()
         scanDirectory(self.local_path, nil)
     end
     
-    logger.info("[BookloreSync] Found", #books, "local books")
+    logger.info("[GrimmorySync] Found", #books, "local books")
     return books
 end
 
-function BookloreSync:makeRequest(endpoint)
+function GrimmorySync:makeRequest(endpoint)
     local ok_http, http = pcall(require, "socket.http")
     local ok_https, https = pcall(require, "ssl.https")
     local ok_ltn12, ltn12 = pcall(require, "ltn12")
@@ -429,16 +437,16 @@ function BookloreSync:makeRequest(endpoint)
     return table.concat(response_body), nil
 end
 
-function BookloreSync:fetchBooklistFromBooklore()
-    logger.info("[BookloreSync] Fetching books from:", self.server_url)
-    logger.info("[BookloreSync] Username:", self.username)
+function GrimmorySync:fetchBooklistFromGrimmory()
+    logger.info("[GrimmorySync] Fetching books from:", self.server_url)
+    logger.info("[GrimmorySync] Username:", self.username)
     
     -- First, get the root OPDS catalog to find the "All Books" link
     local root_response, err = self:makeRequest("/api/v1/opds")
     
     -- If 401, try without authentication
     if err and err:match("401") then
-        logger.info("[BookloreSync] Got 401, trying without auth...")
+        logger.info("[GrimmorySync] Got 401, trying without auth...")
         local old_user, old_pass = self.username, self.password
         self.username, self.password = "", ""
         root_response, err = self:makeRequest("/api/v1/opds")
@@ -474,7 +482,7 @@ function BookloreSync:fetchBooklistFromBooklore()
         return nil, "Could not find 'All Books' catalog link in OPDS feed"
     end
     
-    logger.info("[BookloreSync] Following catalog link:", catalog_link)
+    logger.info("[GrimmorySync] Following catalog link:", catalog_link)
     
     -- Fetch all pages with pagination support
     local books = {}
@@ -484,14 +492,14 @@ function BookloreSync:fetchBooklistFromBooklore()
     
     while current_link and page_count < max_pages do
         page_count = page_count + 1
-        logger.info("[BookloreSync] Fetching page", page_count, ":", current_link)
+        logger.info("[GrimmorySync] Fetching page", page_count, ":", current_link)
         
         local response, err = self:makeRequest(current_link)
         if not response then
             if page_count == 1 then
                 return nil, err  -- Fail if first page fails
             else
-                logger.warn("[BookloreSync] Failed to fetch page", page_count, ":", err)
+                logger.warn("[GrimmorySync] Failed to fetch page", page_count, ":", err)
                 break  -- Stop pagination but return what we have
             end
         end
@@ -603,7 +611,7 @@ function BookloreSync:fetchBooklistFromBooklore()
             end
             
             if title and download_link then
-                logger.info("[BookloreSync] Found book:", title, "by", author or "Unknown", "series:", series or "none", "->", download_link)
+                logger.info("[GrimmorySync] Found book:", title, "by", author or "Unknown", "series:", series or "none", "->", download_link)
                 table.insert(books, {
                     title = title,
                     author = author,
@@ -614,7 +622,7 @@ function BookloreSync:fetchBooklistFromBooklore()
                     download_url = download_link,
                 })
             elseif title then
-                logger.warn("[BookloreSync] Book without download link:", title)
+                logger.warn("[GrimmorySync] Book without download link:", title)
             end
         end
         
@@ -646,23 +654,23 @@ function BookloreSync:fetchBooklistFromBooklore()
         end
         
         if next_link then
-            logger.info("[BookloreSync] Found next page link:", next_link)
+            logger.info("[GrimmorySync] Found next page link:", next_link)
             current_link = next_link
         else
-            logger.info("[BookloreSync] No more pages, stopping at page", page_count)
+            logger.info("[GrimmorySync] No more pages, stopping at page", page_count)
             break
         end
     end
     
     if page_count >= max_pages then
-        logger.warn("[BookloreSync] Reached maximum page limit (", max_pages, "), there may be more books")
+        logger.warn("[GrimmorySync] Reached maximum page limit (", max_pages, "), there may be more books")
     end
     
-    logger.info("[BookloreSync] Found", #books, "remote books across", page_count, "pages")
+    logger.info("[GrimmorySync] Found", #books, "remote books across", page_count, "pages")
     return books, nil
 end
 
-function BookloreSync:convertAuthorName(author)
+function GrimmorySync:convertAuthorName(author)
     if not author or author == "" then
         return "Unknown"
     end
@@ -693,7 +701,7 @@ function BookloreSync:convertAuthorName(author)
     end
 end
 
-function BookloreSync:generateTargetPath(book)
+function GrimmorySync:generateTargetPath(book)
     -- Generate target directory path based on genres and series
     -- Follows the same logic as Calibre save template
     
@@ -783,7 +791,7 @@ function BookloreSync:generateTargetPath(book)
     end
 end
 
-function BookloreSync:generatePossibleFilenames(book)
+function GrimmorySync:generatePossibleFilenames(book)
     -- Generate filename in the single unified format:
     -- "Efternamn, Förnamn - Titel.epub"
     -- Title already includes "Vol. X" for series books
@@ -818,7 +826,7 @@ function BookloreSync:generatePossibleFilenames(book)
     return filenames
 end
 
-function BookloreSync:normalizeForComparison(str)
+function GrimmorySync:normalizeForComparison(str)
     -- Normalize string for comparison by removing accents and special chars
     if not str then return "" end
     
@@ -879,7 +887,7 @@ function BookloreSync:normalizeForComparison(str)
     return str
 end
 
-function BookloreSync:compareAndDownload(local_books, remote_books)
+function GrimmorySync:compareAndDownload(local_books, remote_books)
     -- Build a lookup table of all local filenames (just the filename, not full path)
     local local_lookup = {}
     local local_files_list = {}
@@ -890,7 +898,7 @@ function BookloreSync:compareAndDownload(local_books, remote_books)
         local normalized = self:normalizeForComparison(filename)
         local_lookup[normalized] = true
         table.insert(local_files_list, normalized)
-        logger.info("[BookloreSync] Local file:", normalized)
+        logger.info("[GrimmorySync] Local file:", normalized)
     end
     
     local missing = {}
@@ -900,9 +908,9 @@ function BookloreSync:compareAndDownload(local_books, remote_books)
         -- Generate all possible filenames for this book
         local possible_names = self:generatePossibleFilenames(remote)
         
-        logger.info("[BookloreSync] Checking remote book:", remote.title, "author:", remote.author or "none", "series:", remote.series or "none")
+        logger.info("[GrimmorySync] Checking remote book:", remote.title, "author:", remote.author or "none", "series:", remote.series or "none")
         for idx, pname in ipairs(possible_names) do
-            logger.info("[BookloreSync]   Possible name", idx, ":", pname)
+            logger.info("[GrimmorySync]   Possible name", idx, ":", pname)
         end
         
         -- Check if any of them exist locally
@@ -911,7 +919,7 @@ function BookloreSync:compareAndDownload(local_books, remote_books)
             
             -- Exact match
             if local_lookup[normalized] then
-                logger.info("[BookloreSync] Already have:", remote.title, "(matched:", name, ")")
+                logger.info("[GrimmorySync] Already have:", remote.title, "(matched:", name, ")")
                 matched = true
                 break
             end
@@ -923,7 +931,7 @@ function BookloreSync:compareAndDownload(local_books, remote_books)
                 -- Check if any local file ends with this pattern
                 for _, local_file in ipairs(local_files_list) do
                     if local_file:match(normalized:gsub("^ %- ", ".* %- ") .. "$") then
-                        logger.info("[BookloreSync] Already have:", remote.title, "(fuzzy matched:", local_file, ")")
+                        logger.info("[GrimmorySync] Already have:", remote.title, "(fuzzy matched:", local_file, ")")
                         matched = true
                         break
                     end
@@ -933,7 +941,7 @@ function BookloreSync:compareAndDownload(local_books, remote_books)
         end
         
         if not matched then
-            logger.info("[BookloreSync] Missing book:", remote.title)
+            logger.info("[GrimmorySync] Missing book:", remote.title)
             table.insert(missing, remote)
         end
     end
@@ -945,7 +953,7 @@ function BookloreSync:compareAndDownload(local_books, remote_books)
     local count = 0
     for i, book in ipairs(missing) do
         if self.abort_sync then
-            logger.info("[BookloreSync] Sync aborted by user")
+            logger.info("[GrimmorySync] Sync aborted by user")
             return count, nil
         end
         
@@ -964,7 +972,7 @@ function BookloreSync:compareAndDownload(local_books, remote_books)
     return count, nil
 end
 
-function BookloreSync:buildCalibrePath(book)
+function GrimmorySync:buildCalibrePath(book)
     -- Simply use generatePossibleFilenames to get the single unified format
     local possible = self:generatePossibleFilenames(book)
     local filename = possible[1] or (book.title .. ".epub")
@@ -973,23 +981,23 @@ function BookloreSync:buildCalibrePath(book)
     return full_path, self.local_path, filename
 end
 
-function BookloreSync:downloadBook(book)
+function GrimmorySync:downloadBook(book)
     local ok_http, http = pcall(require, "socket.http")
     local ok_https, https = pcall(require, "ssl.https")
     local ok_ltn12, ltn12 = pcall(require, "ltn12")
     
     if not ok_http or not ok_ltn12 then
-        logger.err("[BookloreSync] Cannot load HTTP libraries")
+        logger.err("[GrimmorySync] Cannot load HTTP libraries")
         return false
     end
     
     local ok_lfs, lfs = pcall(require, "libs/libkoreader-lfs")
     if not ok_lfs then
-        logger.err("[BookloreSync] Cannot load lfs")
+        logger.err("[GrimmorySync] Cannot load lfs")
         return false
     end
     
-    logger.info("[BookloreSync] Downloading:", book.title)
+    logger.info("[GrimmorySync] Downloading:", book.title)
     
     -- Generate target directory path based on genres/series
     local target_subdir = self:generateTargetPath(book)
@@ -1008,7 +1016,7 @@ function BookloreSync:downloadBook(book)
         default_filename = filename_only
     end
     
-    logger.info("[BookloreSync] Target path:", default_filename)
+    logger.info("[GrimmorySync] Target path:", default_filename)
     
     -- Create directory structure recursively
     local function ensureDir(path)
@@ -1035,10 +1043,10 @@ function BookloreSync:downloadBook(book)
             if not attr then
                 local ok, err = lfs.mkdir(current)
                 if not ok then
-                    logger.err("[BookloreSync] Cannot create directory:", current, "error:", err or "unknown")
+                    logger.err("[GrimmorySync] Cannot create directory:", current, "error:", err or "unknown")
                     return false
                 end
-                logger.info("[BookloreSync] Created directory:", current)
+                logger.info("[GrimmorySync] Created directory:", current)
             end
         end
         return true
@@ -1055,7 +1063,7 @@ function BookloreSync:downloadBook(book)
         full_path = self.local_path .. "/" .. default_filename
         dir_path = self.local_path
     end
-    logger.info("[BookloreSync] Using generated filename:", default_filename)
+    logger.info("[GrimmorySync] Using generated filename:", default_filename)
     
     -- Create directories
     if not ensureDir(dir_path) then
@@ -1064,7 +1072,7 @@ function BookloreSync:downloadBook(book)
     
     -- Prepare download URL
     local download_url = self.server_url .. book.download_url
-    logger.info("[BookloreSync] Download URL:", download_url)
+    logger.info("[GrimmorySync] Download URL:", download_url)
     
     -- Prepare HTTP headers
     local headers = {}
@@ -1076,7 +1084,7 @@ function BookloreSync:downloadBook(book)
     -- Open file for writing
     local file = io.open(full_path, "wb")
     if not file then
-        logger.err("[BookloreSync] Cannot create:", full_path)
+        logger.err("[GrimmorySync] Cannot create:", full_path)
         return false
     end
     
@@ -1093,7 +1101,7 @@ function BookloreSync:downloadBook(book)
     
     -- Check result
     if not success or (type(status_code) == "number" and status_code ~= 200) then
-        logger.err("[BookloreSync] Download failed:", status_code or "unknown error")
+        logger.err("[GrimmorySync] Download failed:", status_code or "unknown error")
         pcall(os.remove, full_path)
         return false
     end
@@ -1101,17 +1109,17 @@ function BookloreSync:downloadBook(book)
     -- Verify file was created and has content
     local attr = lfs.attributes(full_path)
     if not attr or attr.size == 0 then
-        logger.err("[BookloreSync] Downloaded file is empty or missing")
+        logger.err("[GrimmorySync] Downloaded file is empty or missing")
         pcall(os.remove, full_path)
         return false
     end
     
-    logger.info("[BookloreSync] OK:", book.title, "(" .. attr.size .. " bytes)")
+    logger.info("[GrimmorySync] OK:", book.title, "(" .. attr.size .. " bytes)")
     self:recordDownload(book, full_path)
     return true
 end
 
-function BookloreSync:showProgressDialog(text)
+function GrimmorySync:showProgressDialog(text)
     -- Always close and create new dialog since InfoMessage doesn't have setText
     if self.progress_dialog then
         UIManager:close(self.progress_dialog)
@@ -1125,14 +1133,14 @@ function BookloreSync:showProgressDialog(text)
     UIManager:forceRePaint()
 end
 
-function BookloreSync:closeProgressDialog()
+function GrimmorySync:closeProgressDialog()
     if self.progress_dialog then
         UIManager:close(self.progress_dialog)
         self.progress_dialog = nil
     end
 end
 
-function BookloreSync:startSync()
+function GrimmorySync:startSync()
     if self.server_url == "" then
         UIManager:show(ConfirmBox:new{
             text = _("Server not configured!\n\nConfigure now?"),
@@ -1158,7 +1166,7 @@ function BookloreSync:startSync()
     })
 end
 
-function BookloreSync:performSync()
+function GrimmorySync:performSync()
     self:showProgressDialog("Skannar lokala böcker...")
     
     local ok, success, count_or_err = pcall(function()
@@ -1177,7 +1185,7 @@ function BookloreSync:performSync()
         end)
         
         local local_books = self:scanLocalBooks()
-        logger.info("[BookloreSync] Local books found:", #local_books)
+        logger.info("[GrimmorySync] Local books found:", #local_books)
         
         if self.abort_sync then
             return false, "Avbruten"
@@ -1188,7 +1196,7 @@ function BookloreSync:performSync()
             #local_books
         ))
         
-        local remote_books, err = self:fetchBooklistFromBooklore()
+        local remote_books, err = self:fetchBooklistFromGrimmory()
         
         if not remote_books then
             return false, err
@@ -1198,7 +1206,7 @@ function BookloreSync:performSync()
             return false, "Avbruten"
         end
         
-        logger.info("[BookloreSync] Remote books found:", #remote_books)
+        logger.info("[GrimmorySync] Remote books found:", #remote_books)
         
         self:showProgressDialog(string.format(
             "Jämför och laddar ner...\n\nLokala: %d\nServern: %d\n\nTryck för att avbryta",
@@ -1217,7 +1225,7 @@ function BookloreSync:performSync()
             text = _("Sync error: ") .. tostring(success),
             timeout = 5,
         })
-        logger.err("[BookloreSync] Sync error:", success)
+        logger.err("[GrimmorySync] Sync error:", success)
         return
     end
     
@@ -1227,7 +1235,7 @@ function BookloreSync:performSync()
                 text = _("Error: ") .. tostring(count_or_err),
                 timeout = 5,
             })
-            logger.err("[BookloreSync] Error:", count_or_err)
+            logger.err("[GrimmorySync] Error:", count_or_err)
         end
         return
     end
@@ -1246,7 +1254,7 @@ function BookloreSync:performSync()
     })
 end
 
-function BookloreSync:showStatus()
+function GrimmorySync:showStatus()
     local books = self:scanLocalBooks()
     local text = string.format(
         "Server: %s\nUser: %s\nPath: %s\nLocal: %d books",
@@ -1262,4 +1270,4 @@ function BookloreSync:showStatus()
     })
 end
 
-return BookloreSync
+return GrimmorySync

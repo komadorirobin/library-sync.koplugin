@@ -1,7 +1,7 @@
 local _ = require("gettext")
 return {
-    name = "bookloresync",
-    fullname = _("Booklore Sync"),
-    description = _("Sync missing books from a Booklore/Grimmory OPDS server"),
-    version = "0.1.0",
+    name = "grimmorysync",
+    fullname = _("Grimmory Sync"),
+    description = _("Sync missing books from a Grimmory OPDS server"),
+    version = "0.2.0",
 }
