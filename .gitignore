@@ -1,0 +1,9 @@
+.DS_Store
+*.zip
+*.bak
+*.backup
+*.backuplua*
+mainbackup.lua
+test-*.lua
+booklore_sync_settings.txt
+booklore_sync_history.lua
