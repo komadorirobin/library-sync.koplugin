@@ -21,6 +21,7 @@ local HISTORY_FILE = "/storage/emulated/0/koreader/grimmory_sync_history.lua"
 local LEGACY_HISTORY_FILE = "/storage/emulated/0/koreader/booklore_sync_history.lua"
 local MANIFEST_FILE = "/storage/emulated/0/koreader/grimmory_sync_manifest.lua"
 local MAX_HISTORY = 15
+local PROGRESS_STEP_DELAY_S = 0.2
 
 function GrimmorySync:loadSettings()
     local file = io.open(SETTINGS_FILE, "r") or io.open(LEGACY_SETTINGS_FILE, "r")
@@ -1082,7 +1083,7 @@ function GrimmorySync:compareAndDownload(local_books, remote_books)
         end
         
         self:showProgressDialog(string.format(
-            "Laddar ner bok %d av %d...\n\n%s\n\nTryck för att avbryta",
+            "Laddar ner bok %d av %d...\n\n%s\n\nTryck Avbryt för att stoppa efter pågående fil.",
             i,
             #missing,
             book.title
@@ -1153,7 +1154,7 @@ function GrimmorySync:refreshExistingMetadata(local_books, remote_books)
         end
 
         self:showProgressDialog(string.format(
-            "Uppdaterar metadata %d av %d...\n\n%s\n\nHoppade över oförändrade: %d\n\nTryck för att avbryta",
+            "Uppdaterar metadata %d av %d...\n\n%s\n\nHoppade över oförändrade: %d\n\nTryck Avbryt för att stoppa efter pågående fil.",
             i,
             #matched,
             item.remote.title,
@@ -1211,7 +1212,7 @@ function GrimmorySync:refreshExistingMetadataAsync(matched, skipped, manifest, d
 
         local item = matched[i]
         self:showProgressDialog(string.format(
-            "Uppdaterar metadata %d av %d...\n\n%s\n\nUppdaterade: %d\nHoppade över oförändrade: %d\n\nTryck för att avbryta",
+            "Uppdaterar metadata %d av %d...\n\n%s\n\nUppdaterade: %d\nHoppade över oförändrade: %d\n\nTryck Avbryt för att stoppa efter pågående fil.",
             i,
             total,
             item.remote.title,
@@ -1219,7 +1220,7 @@ function GrimmorySync:refreshExistingMetadataAsync(matched, skipped, manifest, d
             skipped or 0
         ))
 
-        UIManager:nextTick(function()
+        UIManager:scheduleIn(PROGRESS_STEP_DELAY_S, function()
             if self.abort_sync then
                 UIManager:scheduleIn(0, step)
                 return
@@ -1232,11 +1233,11 @@ function GrimmorySync:refreshExistingMetadataAsync(matched, skipped, manifest, d
                 self:saveManifest(manifest)
             end
 
-            UIManager:scheduleIn(0, step)
+            UIManager:scheduleIn(PROGRESS_STEP_DELAY_S, step)
         end)
     end
 
-    UIManager:scheduleIn(0, step)
+    UIManager:scheduleIn(PROGRESS_STEP_DELAY_S, step)
 end
 
 function GrimmorySync:buildCalibrePath(book)
@@ -1454,6 +1455,7 @@ function GrimmorySync:requestAbort(message)
     self.abort_sync = true
     if self.abort_notified then return end
     self.abort_notified = true
+    self:closeProgressDialog()
     UIManager:show(InfoMessage:new{
         text = message or _("Avbryter efter pågående nedladdning..."),
         timeout = 2,
@@ -1465,17 +1467,23 @@ function GrimmorySync:showProgressDialog(text)
     if self.progress_dialog then
         self:closeProgressDialog()
     end
-    
-    self.progress_dialog = InfoMessage:new{
-        text = text,
-        timeout = nil,  -- No auto-close
-        dismiss_callback = function()
-            self:requestAbort(_("Avbryter efter pågående nedladdning..."))
-        end,
+
+    local ButtonDialog = require("ui/widget/buttondialog")
+    local dialog
+    dialog = ButtonDialog:new{
+        title = text,
+        buttons = {
+            {
+                {
+                    text = _("Avbryt"),
+                    callback = function()
+                        self:requestAbort(_("Synken avbryts efter pågående fil..."))
+                    end,
+                },
+            },
+        },
     }
-    self.progress_dialog.dismiss_callback = function()
-        self:requestAbort(_("Avbryter efter pågående nedladdning..."))
-    end
+    self.progress_dialog = dialog
     UIManager:show(self.progress_dialog)
     UIManager:forceRePaint()
 end
@@ -1484,9 +1492,6 @@ function GrimmorySync:closeProgressDialog()
     if self.progress_dialog then
         local dialog = self.progress_dialog
         self.progress_dialog = nil
-        -- Programmatic closes happen whenever the plugin advances to a new
-        -- progress message. They must not be interpreted as a user cancel.
-        dialog.dismiss_callback = nil
         UIManager:close(dialog)
     end
 end
@@ -1547,14 +1552,6 @@ function GrimmorySync:performSync()
     self:showProgressDialog("Skannar lokala böcker...")
     
     local ok, success, count_or_err = pcall(function()
-        UIManager:scheduleIn(0.1, function()
-            if self.progress_dialog then
-                self.progress_dialog.dismiss_callback = function()
-                    self:requestAbort(_("Synk avbryts efter pågående nedladdning..."))
-                end
-            end
-        end)
-        
         local local_books = self:scanLocalBooks()
         logger.info("[GrimmorySync] Local books found:", #local_books)
         
@@ -1563,7 +1560,7 @@ function GrimmorySync:performSync()
         end
         
         self:showProgressDialog(string.format(
-            "Hämtar böcker från server...\n\nLokala böcker: %d\n\nTryck för att avbryta",
+            "Hämtar böcker från server...\n\nLokala böcker: %d\n\nTryck Avbryt för att stoppa efter pågående steg.",
             #local_books
         ))
         
@@ -1580,7 +1577,7 @@ function GrimmorySync:performSync()
         logger.info("[GrimmorySync] Remote books found:", #remote_books)
         
         self:showProgressDialog(string.format(
-            "Jämför och laddar ner...\n\nLokala: %d\nServern: %d\n\nTryck för att avbryta",
+            "Jämför och laddar ner...\n\nLokala: %d\nServern: %d\n\nTryck Avbryt för att stoppa efter pågående fil.",
             #local_books,
             #remote_books
         ))
@@ -1637,7 +1634,7 @@ function GrimmorySync:performMetadataRefresh()
         end
 
         self:showProgressDialog(string.format(
-            "Hämtar böcker från server...\n\nLokala böcker: %d\n\nTryck för att avbryta",
+            "Hämtar böcker från server...\n\nLokala böcker: %d\n\nTryck Avbryt för att stoppa efter pågående steg.",
             #local_books
         ))
 
