@@ -158,7 +158,9 @@ function GrimmorySync:getRecentBooksMenu()
         table.insert(items, {
             text = display,
             callback = function()
-                self:openRecentBook(entry_ref)
+                self:runAfterMenuClose(function()
+                    self:openRecentBook(entry_ref)
+                end)
             end,
         })
     end
@@ -170,18 +172,20 @@ function GrimmorySync:getRecentBooksMenu()
     table.insert(items, {
         text = _("Rensa historik"),
         callback = function()
-            UIManager:show(ConfirmBox:new{
-                text = _("Rensa hela nedladdningshistoriken?"),
-                ok_text = _("Rensa"),
-                cancel_text = _("Avbryt"),
-                ok_callback = function()
-                    self:saveHistory({})
-                    UIManager:show(InfoMessage:new{
-                        text = _("Historiken rensad."),
-                        timeout = 2,
-                    })
-                end,
-            })
+            self:runAfterMenuClose(function()
+                UIManager:show(ConfirmBox:new{
+                    text = _("Rensa hela nedladdningshistoriken?"),
+                    ok_text = _("Rensa"),
+                    cancel_text = _("Avbryt"),
+                    ok_callback = function()
+                        self:saveHistory({})
+                        UIManager:show(InfoMessage:new{
+                            text = _("Historiken rensad."),
+                            timeout = 2,
+                        })
+                    end,
+                })
+            end)
         end,
     })
 
@@ -210,6 +214,12 @@ function GrimmorySync:openRecentBook(entry)
     end
 end
 
+function GrimmorySync:runAfterMenuClose(callback)
+    -- Menu callbacks can still be on screen while they are executing.
+    -- Deferring by one UI turn avoids stacking dialogs behind/over the menu.
+    UIManager:scheduleIn(0.1, callback)
+end
+
 function GrimmorySync:init()
     if self.ui and self.ui.menu then
         self.ui.menu:registerToMainMenu(self)
@@ -230,19 +240,25 @@ function GrimmorySync:addToMainMenu(menu_items)
             {
                 text = _("Sync missing books"),
                 callback = function()
-                    self:startSync()
+                    self:runAfterMenuClose(function()
+                        self:startSync()
+                    end)
                 end,
             },
             {
                 text = _("Refresh existing metadata"),
                 callback = function()
-                    self:startMetadataRefresh()
+                    self:runAfterMenuClose(function()
+                        self:startMetadataRefresh()
+                    end)
                 end,
             },
             {
                 text = _("Check for updates"),
                 callback = function()
-                    Updater.checkForUpdates()
+                    self:runAfterMenuClose(function()
+                        Updater.checkForUpdates()
+                    end)
                 end,
             },
             {
@@ -254,13 +270,17 @@ function GrimmorySync:addToMainMenu(menu_items)
             {
                 text = _("Configure"),
                 callback = function()
-                    self:showServerConfig()
+                    self:runAfterMenuClose(function()
+                        self:showServerConfig()
+                    end)
                 end,
             },
             {
                 text = _("Show status"),
                 callback = function()
-                    self:showStatus()
+                    self:runAfterMenuClose(function()
+                        self:showStatus()
+                    end)
                 end,
             },
         },
