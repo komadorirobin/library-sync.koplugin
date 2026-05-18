@@ -157,8 +157,8 @@ function GrimmorySync:getRecentBooksMenu()
         local entry_ref = entry
         table.insert(items, {
             text = display,
-            callback = function()
-                self:runAfterMenuClose(function()
+            callback = function(touchmenu_instance)
+                self:runAfterMenuClose(touchmenu_instance, function()
                     self:openRecentBook(entry_ref)
                 end)
             end,
@@ -171,8 +171,8 @@ function GrimmorySync:getRecentBooksMenu()
     })
     table.insert(items, {
         text = _("Rensa historik"),
-        callback = function()
-            self:runAfterMenuClose(function()
+        callback = function(touchmenu_instance)
+            self:runAfterMenuClose(touchmenu_instance, function()
                 UIManager:show(ConfirmBox:new{
                     text = _("Rensa hela nedladdningshistoriken?"),
                     ok_text = _("Rensa"),
@@ -214,7 +214,14 @@ function GrimmorySync:openRecentBook(entry)
     end
 end
 
-function GrimmorySync:runAfterMenuClose(callback)
+function GrimmorySync:runAfterMenuClose(touchmenu_instance, callback)
+    if type(touchmenu_instance) == "function" and callback == nil then
+        callback = touchmenu_instance
+        touchmenu_instance = nil
+    end
+    if touchmenu_instance then
+        UIManager:close(touchmenu_instance)
+    end
     -- Menu callbacks can still be on screen while they are executing.
     -- Deferring by one UI turn avoids stacking dialogs behind/over the menu.
     UIManager:scheduleIn(0.1, callback)
@@ -239,24 +246,24 @@ function GrimmorySync:addToMainMenu(menu_items)
         sub_item_table = {
             {
                 text = _("Sync missing books"),
-                callback = function()
-                    self:runAfterMenuClose(function()
+                callback = function(touchmenu_instance)
+                    self:runAfterMenuClose(touchmenu_instance, function()
                         self:startSync()
                     end)
                 end,
             },
             {
                 text = _("Refresh existing metadata"),
-                callback = function()
-                    self:runAfterMenuClose(function()
+                callback = function(touchmenu_instance)
+                    self:runAfterMenuClose(touchmenu_instance, function()
                         self:startMetadataRefresh()
                     end)
                 end,
             },
             {
                 text = _("Check for updates"),
-                callback = function()
-                    self:runAfterMenuClose(function()
+                callback = function(touchmenu_instance)
+                    self:runAfterMenuClose(touchmenu_instance, function()
                         Updater.checkForUpdates()
                     end)
                 end,
@@ -269,16 +276,16 @@ function GrimmorySync:addToMainMenu(menu_items)
             },
             {
                 text = _("Configure"),
-                callback = function()
-                    self:runAfterMenuClose(function()
+                callback = function(touchmenu_instance)
+                    self:runAfterMenuClose(touchmenu_instance, function()
                         self:showServerConfig()
                     end)
                 end,
             },
             {
                 text = _("Show status"),
-                callback = function()
-                    self:runAfterMenuClose(function()
+                callback = function(touchmenu_instance)
+                    self:runAfterMenuClose(touchmenu_instance, function()
                         self:showStatus()
                     end)
                 end,
