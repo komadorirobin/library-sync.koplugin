@@ -22,6 +22,61 @@ local LEGACY_HISTORY_FILE = "/storage/emulated/0/koreader/booklore_sync_history.
 local MANIFEST_FILE = "/storage/emulated/0/koreader/grimmory_sync_manifest.lua"
 local MAX_HISTORY = 15
 local PROGRESS_STEP_DELAY_S = 0.2
+local AUTHOR_IMAGE_EXTS = { "jpg", "jpeg", "png", "gif", "bmp", "webp", "tiff", "tif" }
+
+local function settingToBool(value, default)
+    if value == nil or value == "" then
+        return default
+    end
+    value = tostring(value):lower()
+    return value == "true" or value == "1" or value == "yes" or value == "on"
+end
+
+local function boolToSetting(value)
+    return value and "true" or "false"
+end
+
+local function trim(str)
+    if type(str) ~= "string" then return "" end
+    return str:gsub("^%s+", ""):gsub("%s+$", "")
+end
+
+local function jsonString(value)
+    value = tostring(value or "")
+    value = value:gsub("\\", "\\\\")
+        :gsub('"', '\\"')
+        :gsub("\n", "\\n")
+        :gsub("\r", "\\r")
+        :gsub("\t", "\\t")
+    return '"' .. value .. '"'
+end
+
+local function jsonObject(values)
+    local parts = {}
+    for key, value in pairs(values) do
+        parts[#parts + 1] = jsonString(key) .. ":" .. jsonString(value)
+    end
+    return "{" .. table.concat(parts, ",") .. "}"
+end
+
+local function urlEncode(value)
+    return tostring(value or ""):gsub("([^%w%-_%.~])", function(char)
+        return string.format("%%%02X", string.byte(char))
+    end)
+end
+
+local function jsonDecode(body)
+    local ok_json, json = pcall(require, "json")
+    if not ok_json or not json or type(json.decode) ~= "function" then
+        return nil, "Cannot load JSON parser"
+    end
+
+    local ok_decode, data = pcall(json.decode, body)
+    if not ok_decode or type(data) ~= "table" then
+        return nil, "Could not parse JSON response"
+    end
+    return data, nil
+end
 
 function GrimmorySync:loadSettings()
     local file = io.open(SETTINGS_FILE, "r") or io.open(LEGACY_SETTINGS_FILE, "r")
@@ -30,7 +85,8 @@ function GrimmorySync:loadSettings()
             server_url = "",
             username = "",
             password = "",
-            local_path = "/storage/emulated/0/ePubs"
+            local_path = "/storage/emulated/0/ePubs",
+            sync_author_images = true,
         }
     end
     
@@ -47,7 +103,8 @@ function GrimmorySync:loadSettings()
         server_url = settings.server_url or "",
         username = settings.username or "",
         password = settings.password or "",
-        local_path = settings.local_path or "/storage/emulated/0/ePubs"
+        local_path = settings.local_path or "/storage/emulated/0/ePubs",
+        sync_author_images = settingToBool(settings.sync_author_images, true),
     }
 end
 
@@ -62,6 +119,7 @@ function GrimmorySync:saveSettings()
     file:write("username=" .. self.username .. "\n")
     file:write("password=" .. self.password .. "\n")
     file:write("local_path=" .. self.local_path .. "\n")
+    file:write("sync_author_images=" .. boolToSetting(self.sync_author_images ~= false) .. "\n")
     file:close()
 end
 
@@ -237,6 +295,7 @@ function GrimmorySync:init()
     self.username = settings.username
     self.password = settings.password
     self.local_path = settings.local_path
+    self.sync_author_images = settings.sync_author_images ~= false
 end
 
 function GrimmorySync:addToMainMenu(menu_items)
@@ -258,6 +317,23 @@ function GrimmorySync:addToMainMenu(menu_items)
                     self:runAfterMenuClose(touchmenu_instance, function()
                         self:startMetadataRefresh()
                     end)
+                end,
+            },
+            {
+                text = _("Sync author images during metadata refresh"),
+                checked_func = function()
+                    return self.sync_author_images ~= false
+                end,
+                keep_menu_open = true,
+                callback = function()
+                    self.sync_author_images = not (self.sync_author_images ~= false)
+                    self:saveSettings()
+                    UIManager:show(InfoMessage:new{
+                        text = self.sync_author_images
+                            and _("Author image sync enabled")
+                            or _("Author image sync disabled"),
+                        timeout = 2,
+                    })
                 end,
             },
             {
@@ -467,46 +543,126 @@ function GrimmorySync:scanLocalBooks()
     return books
 end
 
-function GrimmorySync:makeRequest(endpoint)
+function GrimmorySync:buildServerUrl(endpoint)
+    if type(endpoint) == "string" and endpoint:match("^https?://") then
+        return endpoint
+    end
+
+    local base = trim(self.server_url):gsub("/+$", "")
+    endpoint = tostring(endpoint or "")
+    if endpoint:sub(1, 1) ~= "/" then
+        endpoint = "/" .. endpoint
+    end
+    return base .. endpoint
+end
+
+function GrimmorySync:ensureDirectory(path)
+    local ok_lfs, lfs = pcall(require, "libs/libkoreader-lfs")
+    if not ok_lfs then
+        logger.err("[GrimmorySync] Cannot load lfs")
+        return false
+    end
+
+    if type(path) ~= "string" or path == "" then
+        return false
+    end
+
+    local is_absolute = path:match("^/")
+    local current = is_absolute and "" or nil
+    for part in path:gmatch("[^/]+") do
+        if current == nil then
+            current = part
+        elseif current == "" then
+            current = "/" .. part
+        else
+            current = current .. "/" .. part
+        end
+
+        local attr = lfs.attributes(current)
+        if not attr then
+            local ok, err = lfs.mkdir(current)
+            if not ok then
+                logger.err("[GrimmorySync] Cannot create directory:", current, "error:", err or "unknown")
+                return false
+            end
+            logger.info("[GrimmorySync] Created directory:", current)
+        elseif attr.mode ~= "directory" then
+            logger.err("[GrimmorySync] Path is not a directory:", current)
+            return false
+        end
+    end
+
+    return true
+end
+
+function GrimmorySync:httpRequest(url, options)
+    options = options or {}
+
     local ok_http, http = pcall(require, "socket.http")
     local ok_https, https = pcall(require, "ssl.https")
     local ok_ltn12, ltn12 = pcall(require, "ltn12")
-    
+
     if not ok_http or not ok_ltn12 then
         return nil, "Cannot load HTTP libraries"
     end
-    
-    -- Build full URL
-    local url = self.server_url .. endpoint
-    
-    -- Prepare headers
+
+    local headers = {}
+    for key, value in pairs(options.headers or {}) do
+        headers[key] = value
+    end
+
+    local request = {
+        url = url,
+        method = options.method or "GET",
+        headers = headers,
+        sink = options.sink,
+    }
+
+    local response_body
+    if not request.sink then
+        response_body = {}
+        request.sink = ltn12.sink.table(response_body)
+    end
+
+    if options.body then
+        headers["content-length"] = tostring(#options.body)
+        request.source = ltn12.source.string(options.body)
+    end
+
+    local request_func = url:match("^https://")
+        and (ok_https and https.request or http.request)
+        or http.request
+
+    local success, status_code, response_headers = request_func(request)
+    local status_num = tonumber(status_code)
+    local body = response_body and table.concat(response_body) or true
+
+    if not success then
+        return body, "Connection failed: " .. tostring(status_code), status_code, response_headers
+    end
+
+    if status_num and (status_num < 200 or status_num >= 300) then
+        return body, "HTTP " .. status_code, status_code, response_headers
+    end
+
+    return body, nil, status_code, response_headers
+end
+
+function GrimmorySync:makeRequest(endpoint)
     local headers = {}
     if self.username ~= "" and self.password ~= "" then
         local mime = require("mime")
         headers["authorization"] = "Basic " .. mime.b64(self.username .. ":" .. self.password)
     end
-    
-    -- Choose appropriate request function based on protocol
-    local request_func = url:match("^https://") and (ok_https and https.request or http.request) or http.request
-    
-    -- Collect response
-    local response_body = {}
-    local success, status_code, response_headers = request_func{
-        url = url,
-        sink = ltn12.sink.table(response_body),
+
+    local body, err = self:httpRequest(self:buildServerUrl(endpoint), {
         headers = headers,
-    }
-    
-    -- Check result
-    if not success then
-        return nil, "Connection failed: " .. tostring(status_code)
+    })
+    if err then
+        return nil, err
     end
-    
-    if type(status_code) == "number" and status_code ~= 200 then
-        return nil, "HTTP " .. status_code
-    end
-    
-    return table.concat(response_body), nil
+
+    return body, nil
 end
 
 function GrimmorySync:fetchBooklistFromGrimmory()
@@ -1077,6 +1233,468 @@ function GrimmorySync:storeManifestEntry(manifest, path, remote)
     }
 end
 
+function GrimmorySync:authorImagesPath()
+    return (self.local_path or "/storage/emulated/0/ePubs"):gsub("/+$", "")
+        .. "/.bookshelf-images/authors"
+end
+
+function GrimmorySync:bookshelfSlug(name)
+    name = trim(name):lower()
+    if name == "" then return "" end
+    name = name:gsub("[,;:./%s_\\]+", "-")
+    name = name:gsub("^%-+", ""):gsub("%-+$", "")
+    return name
+end
+
+function GrimmorySync:safeExactImageStem(name)
+    name = trim(name)
+    if name == "" then return nil end
+    local unsafe = { "/", "\\", ":", "<", ">", '"', "|", "?", "*" }
+    for _, char in ipairs(unsafe) do
+        if name:find(char, 1, true) then
+            return nil
+        end
+    end
+    return name
+end
+
+function GrimmorySync:safeSlugImageStem(name)
+    name = trim(name)
+    if name == "" then return nil end
+    name = name:gsub("[/%\\:%<%>%\"%|%?%*]", "-")
+    name = name:gsub("%-+", "-")
+    name = name:gsub("^%-+", ""):gsub("%-+$", "")
+    if name == "" then return nil end
+    return name
+end
+
+function GrimmorySync:authorImageStems(author_name)
+    local stems, seen = {}, {}
+
+    local function addExact(name)
+        local safe = self:safeExactImageStem(name)
+        if safe and not seen[safe] then
+            seen[safe] = true
+            stems[#stems + 1] = safe
+        end
+    end
+
+    local function addSlug(name)
+        local slug = self:bookshelfSlug(name)
+        slug = self:safeSlugImageStem(slug)
+        if slug and not seen[slug] then
+            seen[slug] = true
+            stems[#stems + 1] = slug
+        end
+    end
+
+    author_name = trim(author_name)
+    if author_name == "" then return stems end
+
+    addExact(author_name)
+    addSlug(author_name)
+
+    local converted = self:convertAuthorName(author_name)
+    if converted and converted ~= "" and converted ~= author_name then
+        addExact(converted)
+        addSlug(converted)
+    end
+
+    return stems
+end
+
+function GrimmorySync:copyFile(src, dst)
+    if src == dst then return true end
+
+    local input = io.open(src, "rb")
+    if not input then return false end
+    local data = input:read("*a")
+    input:close()
+
+    local output = io.open(dst, "wb")
+    if not output then return false end
+    local ok = output:write(data)
+    output:close()
+    return ok and true or false
+end
+
+function GrimmorySync:imageExtensionFromHeaders(headers)
+    local content_type
+    for key, value in pairs(headers or {}) do
+        if tostring(key):lower() == "content-type" then
+            content_type = tostring(value):lower()
+            break
+        end
+    end
+
+    if content_type then
+        if content_type:match("image/png") then return "png" end
+        if content_type:match("image/webp") then return "webp" end
+        if content_type:match("image/gif") then return "gif" end
+        if content_type:match("image/bmp") then return "bmp" end
+        if content_type:match("image/tiff") then return "tiff" end
+        if content_type:match("image/jpeg") or content_type:match("image/jpg") then return "jpg" end
+    end
+
+    return "jpg"
+end
+
+function GrimmorySync:removeAuthorImageVariants(image_dir, stem, keep_ext)
+    for _, ext in ipairs(AUTHOR_IMAGE_EXTS) do
+        if ext ~= keep_ext then
+            pcall(os.remove, image_dir .. "/" .. stem .. "." .. ext)
+        end
+    end
+end
+
+function GrimmorySync:loginToGrimmoryApi()
+    if self.username == "" or self.password == "" then
+        return nil, "Author image sync requires Grimmory username and password."
+    end
+
+    local body = jsonObject({
+        username = self.username,
+        password = self.password,
+    })
+
+    local response, err = self:httpRequest(self:buildServerUrl("/api/v1/auth/login"), {
+        method = "POST",
+        body = body,
+        headers = {
+            ["accept"] = "application/json",
+            ["content-type"] = "application/json",
+        },
+    })
+    if err then
+        return nil, err
+    end
+
+    local data, decode_err = jsonDecode(response)
+    if not data then
+        local token = response and response:match('"accessToken"%s*:%s*"([^"]+)"')
+        if token and token ~= "" then
+            return token, nil
+        end
+        return nil, decode_err
+    end
+
+    if type(data.accessToken) ~= "string" or data.accessToken == "" then
+        return nil, "No access token returned by Grimmory."
+    end
+
+    return data.accessToken, nil
+end
+
+function GrimmorySync:extractAuthorsArray(data)
+    local function asArray(candidate)
+        if type(candidate) == "table" then
+            if candidate[1] ~= nil or next(candidate) == nil then
+                return candidate
+            end
+        end
+        return nil
+    end
+
+    return asArray(data and data.authors)
+        or asArray(data and data.data)
+        or asArray(data and data.content)
+        or asArray(data and data.items)
+        or asArray(data)
+end
+
+function GrimmorySync:fetchAuthorsFromGrimmory(token)
+    local response, err = self:httpRequest(self:buildServerUrl("/api/v1/authors"), {
+        headers = {
+            ["accept"] = "application/json",
+            ["authorization"] = "Bearer " .. token,
+        },
+    })
+    if err then
+        return nil, err
+    end
+
+    local data, decode_err = jsonDecode(response)
+    if not data then
+        return nil, decode_err
+    end
+
+    local authors = self:extractAuthorsArray(data)
+    if not authors then
+        return nil, "Could not find authors array in Grimmory response."
+    end
+
+    return authors, nil
+end
+
+function GrimmorySync:authorHasPhoto(author)
+    if not author then return false end
+    local value = author.hasPhoto
+    if value == nil then value = author.has_photo end
+    if value == nil then value = author.photo end
+    return value == true or value == "true" or value == 1 or value == "1"
+end
+
+function GrimmorySync:authorDisplayName(author)
+    return trim(author and (author.name or author.authorName or author.fullName or author.displayName))
+end
+
+function GrimmorySync:authorId(author)
+    return author and (author.id or author.authorId)
+end
+
+function GrimmorySync:downloadAuthorImage(author, token)
+    local id = self:authorId(author)
+    local name = self:authorDisplayName(author)
+
+    if not id or tostring(id) == "" or name == "" then
+        return false, "Author is missing id or name."
+    end
+
+    local stems = self:authorImageStems(name)
+    if #stems == 0 then
+        return false, "Could not create a Bookshelf image filename for " .. name
+    end
+
+    local image_dir = self:authorImagesPath()
+    if not self:ensureDirectory(image_dir) then
+        return false, "Could not create Bookshelf author image directory."
+    end
+
+    local tmp_path = image_dir .. "/.grimmory-author-" .. tostring(id) .. ".tmp"
+    pcall(os.remove, tmp_path)
+
+    local file = io.open(tmp_path, "wb")
+    if not file then
+        return false, "Could not create temporary author image file."
+    end
+
+    local response, err, status_code, response_headers = self:httpRequest(
+        self:buildServerUrl(
+            "/api/v1/media/author/" .. tostring(id) .. "/photo?token=" .. urlEncode(token)
+        ),
+        {
+            sink = function(chunk, sink_err)
+                if self.abort_sync then
+                    return nil, "aborted"
+                end
+                if chunk then
+                    local ok_write, write_err = file:write(chunk)
+                    if not ok_write then
+                        return nil, write_err
+                    end
+                elseif sink_err then
+                    return nil, sink_err
+                end
+                return 1
+            end,
+            headers = {
+                ["authorization"] = "Bearer " .. token,
+            },
+        }
+    )
+    file:close()
+
+    if err then
+        pcall(os.remove, tmp_path)
+        return false, err .. (status_code and (" for " .. name) or "")
+    end
+
+    if self.abort_sync then
+        pcall(os.remove, tmp_path)
+        return false, "Avbruten"
+    end
+
+    local ok_lfs, lfs = pcall(require, "libs/libkoreader-lfs")
+    if ok_lfs then
+        local attr = lfs.attributes(tmp_path)
+        if not attr or attr.size == 0 then
+            pcall(os.remove, tmp_path)
+            return false, "Downloaded author image was empty for " .. name
+        end
+    end
+
+    local ext = self:imageExtensionFromHeaders(response_headers)
+    local primary = image_dir .. "/" .. stems[1] .. "." .. ext
+    pcall(os.remove, primary)
+    local ok_rename, rename_err = os.rename(tmp_path, primary)
+    if not ok_rename then
+        pcall(os.remove, tmp_path)
+        return false, rename_err or "Could not save author image."
+    end
+    self:removeAuthorImageVariants(image_dir, stems[1], ext)
+
+    for i = 2, #stems do
+        local alias = image_dir .. "/" .. stems[i] .. "." .. ext
+        self:removeAuthorImageVariants(image_dir, stems[i])
+        if not self:copyFile(primary, alias) then
+            logger.warn("[GrimmorySync] Could not create author image alias:", alias)
+        end
+    end
+
+    logger.info("[GrimmorySync] Synced author image:", name, "->", primary)
+    return true, nil
+end
+
+function GrimmorySync:syncAuthorImagesAsync(done_callback)
+    if self.sync_author_images == false then
+        done_callback(true, { enabled = false })
+        return
+    end
+
+    local ok, token_or_err, authors_or_err = pcall(function()
+        self:showProgressDialog("Loggar in för författarbilder...")
+        local token, err = self:loginToGrimmoryApi()
+        if not token then
+            return nil, err
+        end
+
+        if self.abort_sync then
+            return nil, "Avbruten"
+        end
+
+        self:showProgressDialog("Hämtar författare från Grimmory...")
+        local authors, authors_err = self:fetchAuthorsFromGrimmory(token)
+        if not authors then
+            return nil, authors_err
+        end
+
+        return token, authors
+    end)
+
+    if not ok then
+        done_callback(false, { enabled = true, error = token_or_err })
+        return
+    end
+
+    local token = token_or_err
+    local authors = authors_or_err
+    if not token then
+        done_callback(false, { enabled = true, error = authors or "unknown error" })
+        return
+    end
+
+    local queue = {}
+    local skipped = 0
+    for _, author in ipairs(authors) do
+        if self:authorHasPhoto(author) then
+            queue[#queue + 1] = author
+        else
+            skipped = skipped + 1
+        end
+    end
+
+    if #queue == 0 then
+        done_callback(true, {
+            enabled = true,
+            authors = #authors,
+            synced = 0,
+            skipped = skipped,
+            failed = 0,
+            path = self:authorImagesPath(),
+        })
+        return
+    end
+
+    local synced = 0
+    local failed = 0
+    local i = 0
+
+    local function step()
+        if self.abort_sync then
+            done_callback(false, {
+                enabled = true,
+                error = "Avbruten",
+                authors = #authors,
+                synced = synced,
+                skipped = skipped,
+                failed = failed,
+                remaining = #queue - i,
+                path = self:authorImagesPath(),
+            })
+            return
+        end
+
+        i = i + 1
+        if i > #queue then
+            done_callback(true, {
+                enabled = true,
+                authors = #authors,
+                synced = synced,
+                skipped = skipped,
+                failed = failed,
+                path = self:authorImagesPath(),
+            })
+            return
+        end
+
+        local author = queue[i]
+        local name = self:authorDisplayName(author)
+        self:showProgressDialog(string.format(
+            "Synkar författarbild %d av %d...\n\n%s\n\nUppdaterade: %d\nMisslyckade: %d\n\nTryck Avbryt för att stoppa efter pågående bild.",
+            i,
+            #queue,
+            name ~= "" and name or "Okänd författare",
+            synced,
+            failed
+        ))
+
+        UIManager:scheduleIn(PROGRESS_STEP_DELAY_S, function()
+            local image_ok, image_err = self:downloadAuthorImage(author, token)
+            if image_ok then
+                synced = synced + 1
+            else
+                failed = failed + 1
+                logger.warn("[GrimmorySync] Author image sync failed:", image_err or "unknown")
+            end
+            UIManager:scheduleIn(PROGRESS_STEP_DELAY_S, step)
+        end)
+    end
+
+    UIManager:scheduleIn(PROGRESS_STEP_DELAY_S, step)
+end
+
+function GrimmorySync:metadataRefreshMessage(stats, result, image_ok, image_result)
+    result = result or {}
+
+    local title
+    if (result.refreshed or 0) == 0 then
+        title = "✓ Metadata redan aktuell!"
+    else
+        title = "✓ Metadata uppdaterad!"
+    end
+
+    local message = string.format(
+        "%s\n\nLokala: %d böcker\nServern: %d böcker\nUppdaterade: %d böcker\nHoppade över: %d böcker",
+        title,
+        stats.local_count or 0,
+        stats.remote_count or 0,
+        result.refreshed or 0,
+        result.skipped or 0
+    )
+
+    if image_result and image_result.enabled then
+        if image_ok then
+            message = message .. string.format(
+                "\n\nFörfattarbilder: %d uppdaterade\nUtan bild: %d\nMisslyckade: %d",
+                image_result.synced or 0,
+                image_result.skipped or 0,
+                image_result.failed or 0
+            )
+        elseif image_result.error == "Avbruten" then
+            message = message .. string.format(
+                "\n\nFörfattarbildsynk avbruten.\nUppdaterade: %d\nKvar: %d",
+                image_result.synced or 0,
+                image_result.remaining or 0
+            )
+        else
+            message = message .. "\n\nFörfattarbilder misslyckades: "
+                .. tostring(image_result.error or "unknown error")
+        end
+    end
+
+    return message
+end
+
 function GrimmorySync:compareAndDownload(local_books, remote_books)
     local local_index = self:buildLocalBookIndex(local_books)
     local manifest = self:loadManifest()
@@ -1369,7 +1987,7 @@ function GrimmorySync:downloadBook(book, target_path, options)
     end
     
     -- Prepare download URL
-    local download_url = self.server_url .. book.download_url
+    local download_url = self:buildServerUrl(book.download_url)
     logger.info("[GrimmorySync] Download URL:", download_url)
     
     -- Prepare HTTP headers
@@ -1743,16 +2361,31 @@ function GrimmorySync:performMetadataRefresh()
 
     local stats = payload
     local matched = stats.matched or {}
-    if #matched == 0 then
+
+    local function finishWithAuthorImages(result)
         self:closeProgressDialog()
-        UIManager:show(InfoMessage:new{
-            text = string.format(
-                "✓ Metadata redan aktuell!\n\nLokala: %d böcker\nServern: %d böcker\nHoppade över: %d böcker",
-                stats.local_count or 0,
-                stats.remote_count or 0,
-                stats.skipped or 0
-            ),
-            timeout = 5,
+
+        if self.sync_author_images == false then
+            UIManager:show(InfoMessage:new{
+                text = self:metadataRefreshMessage(stats, result),
+                timeout = 5,
+            })
+            return
+        end
+
+        self:syncAuthorImagesAsync(function(image_ok, image_result)
+            self:closeProgressDialog()
+            UIManager:show(InfoMessage:new{
+                text = self:metadataRefreshMessage(stats, result, image_ok, image_result),
+                timeout = 5,
+            })
+        end)
+    end
+
+    if #matched == 0 then
+        finishWithAuthorImages({
+            refreshed = 0,
+            skipped = stats.skipped or 0,
         })
         return
     end
@@ -1780,29 +2413,20 @@ function GrimmorySync:performMetadataRefresh()
             return
         end
 
-        local message = string.format(
-            "✓ Metadata uppdaterad!\n\nLokala: %d böcker\nServern: %d böcker\nUppdaterade: %d böcker\nHoppade över: %d böcker",
-            stats.local_count or 0,
-            stats.remote_count or 0,
-            result.refreshed or 0,
-            result.skipped or 0
-        )
-
-        UIManager:show(InfoMessage:new{
-            text = message,
-            timeout = 5,
-        })
+        finishWithAuthorImages(result)
     end)
 end
 
 function GrimmorySync:showStatus()
     local books = self:scanLocalBooks()
     local text = string.format(
-        "Server: %s\nUser: %s\nPath: %s\nLocal: %d books",
+        "Server: %s\nUser: %s\nPath: %s\nLocal: %d books\nAuthor images: %s\nAuthor image path: %s",
         self.server_url ~= "" and self.server_url or "Not set",
         self.username ~= "" and self.username or "Not set",
         self.local_path,
-        #books
+        #books,
+        self.sync_author_images ~= false and "on" or "off",
+        self:authorImagesPath()
     )
     
     UIManager:show(InfoMessage:new{
