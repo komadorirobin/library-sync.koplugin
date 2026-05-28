@@ -1420,6 +1420,34 @@ function GrimmorySync:removeAuthorImageVariants(image_dir, stem, keep_ext)
     end
 end
 
+function GrimmorySync:authorImageExists(stems)
+    local image_dir = self:authorImagesPath()
+    local ok_lfs, lfs = pcall(require, "libs/libkoreader-lfs")
+
+    for _, stem in ipairs(stems or {}) do
+        for _, ext in ipairs(AUTHOR_IMAGE_EXTS) do
+            local path = image_dir .. "/" .. stem .. "." .. ext
+            if ok_lfs then
+                local ok_attr, attr = pcall(lfs.attributes, path)
+                if ok_attr and attr and attr.mode == "file" and (attr.size == nil or attr.size > 0) then
+                    return true, path
+                end
+            else
+                local file = io.open(path, "rb")
+                if file then
+                    local has_data = file:read(1) ~= nil
+                    file:close()
+                    if has_data then
+                        return true, path
+                    end
+                end
+            end
+        end
+    end
+
+    return false, nil
+end
+
 function GrimmorySync:apiAuthHeaders(token)
     local headers = {}
     if type(token) == "string" and token ~= "" then
@@ -1678,9 +1706,17 @@ function GrimmorySync:syncAuthorImagesAsync(done_callback)
 
     local queue = {}
     local skipped = 0
+    local existing = 0
     for _, author in ipairs(authors) do
         if self:authorHasPhoto(author) then
-            queue[#queue + 1] = author
+            local name = self:authorDisplayName(author)
+            local exists, existing_path = self:authorImageExists(self:authorImageStems(name))
+            if exists then
+                existing = existing + 1
+                logger.info("[GrimmorySync] Author image already exists:", name, "->", existing_path)
+            else
+                queue[#queue + 1] = author
+            end
         else
             skipped = skipped + 1
         end
@@ -1691,6 +1727,7 @@ function GrimmorySync:syncAuthorImagesAsync(done_callback)
             enabled = true,
             authors = #authors,
             synced = 0,
+            existing = existing,
             skipped = skipped,
             failed = 0,
             path = self:authorImagesPath(),
@@ -1710,6 +1747,7 @@ function GrimmorySync:syncAuthorImagesAsync(done_callback)
                 error = "Avbruten",
                 authors = #authors,
                 synced = synced,
+                existing = existing,
                 skipped = skipped,
                 failed = failed,
                 last_error = last_error,
@@ -1725,6 +1763,7 @@ function GrimmorySync:syncAuthorImagesAsync(done_callback)
                 enabled = true,
                 authors = #authors,
                 synced = synced,
+                existing = existing,
                 skipped = skipped,
                 failed = failed,
                 last_error = last_error,
@@ -1736,11 +1775,12 @@ function GrimmorySync:syncAuthorImagesAsync(done_callback)
         local author = queue[i]
         local name = self:authorDisplayName(author)
         self:showProgressDialog(string.format(
-            "Synkar författarbild %d av %d...\n\n%s\n\nUppdaterade: %d\nMisslyckade: %d\n\nTryck Avbryt för att stoppa efter pågående bild.",
+            "Synkar författarbild %d av %d...\n\n%s\n\nUppdaterade: %d\nRedan fanns: %d\nMisslyckade: %d\n\nTryck Avbryt för att stoppa efter pågående bild.",
             i,
             #queue,
             name ~= "" and name or "Okänd författare",
             synced,
+            existing,
             failed
         ))
 
@@ -1782,8 +1822,9 @@ function GrimmorySync:metadataRefreshMessage(stats, result, image_ok, image_resu
     if image_result and image_result.enabled then
         if image_ok then
             message = message .. string.format(
-                "\n\nFörfattarbilder: %d uppdaterade\nUtan bild: %d\nMisslyckade: %d",
+                "\n\nFörfattarbilder: %d uppdaterade\nRedan fanns: %d\nUtan bild: %d\nMisslyckade: %d",
                 image_result.synced or 0,
+                image_result.existing or 0,
                 image_result.skipped or 0,
                 image_result.failed or 0
             )
@@ -1792,8 +1833,9 @@ function GrimmorySync:metadataRefreshMessage(stats, result, image_ok, image_resu
             end
         elseif image_result.error == "Avbruten" then
             message = message .. string.format(
-                "\n\nFörfattarbildsynk avbruten.\nUppdaterade: %d\nKvar: %d",
+                "\n\nFörfattarbildsynk avbruten.\nUppdaterade: %d\nRedan fanns: %d\nKvar: %d",
                 image_result.synced or 0,
+                image_result.existing or 0,
                 image_result.remaining or 0
             )
         else
