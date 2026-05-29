@@ -465,20 +465,9 @@ function GrimmorySync:addToMainMenu(menu_items)
                 end,
             },
             {
-                text = _("Sync author images during metadata refresh"),
-                checked_func = function()
-                    return self.sync_author_images ~= false
-                end,
-                keep_menu_open = true,
-                callback = function()
-                    self.sync_author_images = not (self.sync_author_images ~= false)
-                    self:saveSettings()
-                    UIManager:show(InfoMessage:new{
-                        text = self.sync_author_images
-                            and _("Author image sync enabled")
-                            or _("Author image sync disabled"),
-                        timeout = 2,
-                    })
+                text = _("Bookshelf integration"),
+                sub_item_table_func = function()
+                    return self:getBookshelfIntegrationMenu()
                 end,
             },
             {
@@ -517,6 +506,39 @@ function GrimmorySync:addToMainMenu(menu_items)
                     end)
                 end,
             },
+        },
+    }
+end
+
+function GrimmorySync:getBookshelfIntegrationMenu()
+    return {
+        {
+            text = _("Sync Bookshelf author images during metadata refresh"),
+            checked_func = function()
+                return self.sync_author_images ~= false
+            end,
+            keep_menu_open = true,
+            callback = function()
+                self.sync_author_images = not (self.sync_author_images ~= false)
+                self:saveSettings()
+                UIManager:show(InfoMessage:new{
+                    text = self.sync_author_images
+                        and _("Bookshelf author image sync enabled")
+                        or _("Bookshelf author image sync disabled"),
+                    timeout = 2,
+                })
+            end,
+        },
+        {
+            text = _("Show Bookshelf author image path"),
+            callback = function(touchmenu_instance)
+                self:runAfterMenuClose(touchmenu_instance, function()
+                    UIManager:show(InfoMessage:new{
+                        text = _("Bookshelf author images are written to:\n") .. self:authorImagesPath(),
+                        timeout = 6,
+                    })
+                end)
+            end,
         },
     }
 end
@@ -2375,7 +2397,7 @@ function GrimmorySync:metadataRefreshMessage(stats, result, image_ok, image_resu
     if image_result and image_result.enabled then
         if image_ok then
             message = message .. string.format(
-                "\n\nFörfattarbilder: %d uppdaterade\nRedan fanns: %d\nUtan bild: %d\nMisslyckade: %d",
+                "\n\nBookshelf-författarbilder: %d uppdaterade\nRedan fanns: %d\nUtan bild: %d\nMisslyckade: %d",
                 image_result.synced or 0,
                 image_result.existing or 0,
                 image_result.skipped or 0,
@@ -2386,13 +2408,13 @@ function GrimmorySync:metadataRefreshMessage(stats, result, image_ok, image_resu
             end
         elseif image_result.error == "Avbruten" then
             message = message .. string.format(
-                "\n\nFörfattarbildsynk avbruten.\nUppdaterade: %d\nRedan fanns: %d\nKvar: %d",
+                "\n\nBookshelf-författarbildsynk avbruten.\nUppdaterade: %d\nRedan fanns: %d\nKvar: %d",
                 image_result.synced or 0,
                 image_result.existing or 0,
                 image_result.remaining or 0
             )
         else
-            message = message .. "\n\nFörfattarbilder misslyckades: "
+            message = message .. "\n\nBookshelf-författarbilder misslyckades: "
                 .. tostring(image_result.error or "unknown error")
         end
     end
@@ -3159,7 +3181,7 @@ end
 function GrimmorySync:showStatus()
     local books = self:scanLocalBooks()
     local text = string.format(
-        "Server: %s\nUser: %s\nPath: %s\nLocal: %d books\nFolder profile: %s\nCustom rules: %s\nAuthor images: %s\nAuthor image path: %s",
+        "Server: %s\nUser: %s\nPath: %s\nLocal: %d books\nFolder profile: %s\nCustom rules: %s\nBookshelf author images: %s\nBookshelf image path: %s",
         self.server_url ~= "" and self.server_url or "Not set",
         self.username ~= "" and self.username or "Not set",
         self.local_path,

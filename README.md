@@ -84,16 +84,20 @@ Menu -> Tools -> Grimmory Sync -> Refresh existing metadata
 
 This replaces matched local EPUB files with freshly downloaded copies from Grimmory when their remote metadata signature has changed. The first run creates `grimmory_sync_manifest.lua` and may refresh all matched books once; later runs skip unchanged books. The replacement is conservative: the plugin downloads to a temporary file, verifies that it is not empty, backs up the existing file, and only then moves the new file into place.
 
-Metadata refresh can also sync Grimmory author photos into Bookshelf's default author image library:
+### Bookshelf Integration
+
+Metadata refresh can also sync Grimmory author photos into the separate Bookshelf plugin's default author image library:
 
 ```text
 <local book path>/.bookshelf-images/authors/
 ```
 
+This is intended for KOReader's Bookshelf plugin, which reads author images from its own image-library folders. Grimmory Sync only writes compatible image files there; Bookshelf remains responsible for displaying them.
+
 This is enabled by default and can be toggled from:
 
 ```text
-Menu -> Tools -> Grimmory Sync -> Sync author images during metadata refresh
+Menu -> Tools -> Grimmory Sync -> Bookshelf integration -> Sync Bookshelf author images during metadata refresh
 ```
 
 To update the plugin directly from KOReader, run:
@@ -117,7 +121,7 @@ Books are placed according to the selected download folder profile.
 - The current download implementation prefers EPUB acquisition links.
 - Local matching is filename-based and intentionally fuzzy around common punctuation and accents.
 - Metadata refresh uses `grimmory_sync_manifest.lua` and compares stable metadata such as title, author, series, tags, description, and Hardcover IDs when available from Grimmory's authenticated book API.
-- Author image sync uses Grimmory's authenticated `/api/v1/authors` and `/api/v1/media/author/{id}/photo` endpoints, and writes exact/slugged Bookshelf-compatible filenames.
+- Bookshelf author image sync uses Grimmory's authenticated `/api/v1/authors` and `/api/v1/media/author/{id}/photo` endpoints, and writes exact/slugged Bookshelf-compatible filenames.
 - OTA updates require a release asset named `grimmory-sync.koplugin.zip`.
 - Custom folder placement should live outside the plugin folder so OTA updates do not overwrite it.
 - KOReader must have network access to the Grimmory server.
