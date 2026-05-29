@@ -20,10 +20,24 @@ local LEGACY_SETTINGS_FILE = "/storage/emulated/0/koreader/booklore_sync_setting
 local HISTORY_FILE = "/storage/emulated/0/koreader/grimmory_sync_history.lua"
 local LEGACY_HISTORY_FILE = "/storage/emulated/0/koreader/booklore_sync_history.lua"
 local MANIFEST_FILE = "/storage/emulated/0/koreader/grimmory_sync_manifest.lua"
+local DEFAULT_LOCAL_PATH = "/storage/emulated/0/ePubs"
+local DEFAULT_PATH_RULES_FILE = "/storage/emulated/0/koreader/grimmory_sync_path_rules.lua"
 local MAX_HISTORY = 15
 local PROGRESS_STEP_DELAY_S = 0.2
 local AUTHOR_IMAGE_EXTS = { "jpg", "jpeg", "png", "gif", "bmp", "webp", "tiff", "tif" }
 local SIGNATURE_SEPARATOR = "\31"
+local ROUTING_PROFILE_FLAT = "flat"
+local ROUTING_PROFILE_AUTHOR = "author"
+local ROUTING_PROFILE_GENRE_SERIES = "genre_series"
+local ROUTING_PROFILE_CUSTOM = "custom"
+local ROUTING_PROFILE_ROBIN_LEGACY = "robin_legacy"
+local ROUTING_PROFILE_LIST = {
+    { id = ROUTING_PROFILE_FLAT, label = "Library root" },
+    { id = ROUTING_PROFILE_AUTHOR, label = "Author folders" },
+    { id = ROUTING_PROFILE_GENRE_SERIES, label = "Genre/series folders" },
+    { id = ROUTING_PROFILE_CUSTOM, label = "Custom rules file" },
+    { id = ROUTING_PROFILE_ROBIN_LEGACY, label = "Robin legacy folders" },
+}
 
 local function settingToBool(value, default)
     if value == nil or value == "" then
@@ -35,6 +49,15 @@ end
 
 local function boolToSetting(value)
     return value and "true" or "false"
+end
+
+local function isRoutingProfile(value)
+    for _, profile in ipairs(ROUTING_PROFILE_LIST) do
+        if profile.id == value then
+            return true
+        end
+    end
+    return false
 end
 
 local function trim(str)
@@ -192,8 +215,10 @@ function GrimmorySync:loadSettings()
             server_url = "",
             username = "",
             password = "",
-            local_path = "/storage/emulated/0/ePubs",
+            local_path = DEFAULT_LOCAL_PATH,
             sync_author_images = true,
+            routing_profile = ROUTING_PROFILE_FLAT,
+            path_rules_file = DEFAULT_PATH_RULES_FILE,
         }
     end
     
@@ -205,13 +230,22 @@ function GrimmorySync:loadSettings()
         end
     end
     file:close()
+
+    local routing_profile = settings.routing_profile
+    if routing_profile == nil or routing_profile == "" then
+        routing_profile = ROUTING_PROFILE_ROBIN_LEGACY
+    elseif not isRoutingProfile(routing_profile) then
+        routing_profile = ROUTING_PROFILE_FLAT
+    end
     
     return {
         server_url = settings.server_url or "",
         username = settings.username or "",
         password = settings.password or "",
-        local_path = settings.local_path or "/storage/emulated/0/ePubs",
+        local_path = settings.local_path or DEFAULT_LOCAL_PATH,
         sync_author_images = settingToBool(settings.sync_author_images, true),
+        routing_profile = routing_profile,
+        path_rules_file = settings.path_rules_file or DEFAULT_PATH_RULES_FILE,
     }
 end
 
@@ -227,6 +261,8 @@ function GrimmorySync:saveSettings()
     file:write("password=" .. self.password .. "\n")
     file:write("local_path=" .. self.local_path .. "\n")
     file:write("sync_author_images=" .. boolToSetting(self.sync_author_images ~= false) .. "\n")
+    file:write("routing_profile=" .. (self.routing_profile or ROUTING_PROFILE_FLAT) .. "\n")
+    file:write("path_rules_file=" .. (self.path_rules_file or DEFAULT_PATH_RULES_FILE) .. "\n")
     file:close()
 end
 
@@ -403,6 +439,8 @@ function GrimmorySync:init()
     self.password = settings.password
     self.local_path = settings.local_path
     self.sync_author_images = settings.sync_author_images ~= false
+    self.routing_profile = settings.routing_profile
+    self.path_rules_file = settings.path_rules_file
 end
 
 function GrimmorySync:addToMainMenu(menu_items)
@@ -444,6 +482,12 @@ function GrimmorySync:addToMainMenu(menu_items)
                 end,
             },
             {
+                text = _("Download folder profile"),
+                sub_item_table_func = function()
+                    return self:getRoutingProfileMenu()
+                end,
+            },
+            {
                 text = _("Check for updates"),
                 callback = function(touchmenu_instance)
                     self:runAfterMenuClose(touchmenu_instance, function()
@@ -475,6 +519,53 @@ function GrimmorySync:addToMainMenu(menu_items)
             },
         },
     }
+end
+
+function GrimmorySync:routingProfileLabel(profile_id)
+    for _, profile in ipairs(ROUTING_PROFILE_LIST) do
+        if profile.id == profile_id then
+            return profile.label
+        end
+    end
+    return ROUTING_PROFILE_LIST[1].label
+end
+
+function GrimmorySync:getRoutingProfileMenu()
+    local items = {}
+    for _, profile in ipairs(ROUTING_PROFILE_LIST) do
+        local profile_id = profile.id
+        local profile_label = profile.label
+        table.insert(items, {
+            text = _(profile_label),
+            checked_func = function()
+                return (self.routing_profile or ROUTING_PROFILE_FLAT) == profile_id
+            end,
+            keep_menu_open = true,
+            callback = function()
+                self.routing_profile = profile_id
+                self:saveSettings()
+                UIManager:show(InfoMessage:new{
+                    text = _("Download folder profile: ") .. _(profile_label),
+                    timeout = 2,
+                })
+            end,
+        })
+    end
+
+    table.insert(items, {
+        text = "———",
+        enabled = false,
+    })
+    table.insert(items, {
+        text = _("Custom rules file path"),
+        callback = function(touchmenu_instance)
+            self:runAfterMenuClose(touchmenu_instance, function()
+                self:showPathRulesFileConfig()
+            end)
+        end,
+    })
+
+    return items
 end
 
 function GrimmorySync:showServerConfig()
@@ -573,7 +664,7 @@ function GrimmorySync:showPathConfig()
     input_dialog = InputDialog:new{
         title = _("Local book path"),
         input = self.local_path,
-        input_hint = "/storage/emulated/0/ePubs",
+        input_hint = DEFAULT_LOCAL_PATH,
         input_type = "text",
         buttons = {
             {
@@ -593,6 +684,44 @@ function GrimmorySync:showPathConfig()
                         
                         UIManager:show(InfoMessage:new{
                             text = _("✓ Configuration saved!"),
+                            timeout = 2,
+                        })
+                    end,
+                },
+            },
+        },
+    }
+    UIManager:show(input_dialog)
+    input_dialog:onShowKeyboard()
+end
+
+function GrimmorySync:showPathRulesFileConfig()
+    local input_dialog
+    input_dialog = InputDialog:new{
+        title = _("Custom rules file path"),
+        input = self.path_rules_file or DEFAULT_PATH_RULES_FILE,
+        input_hint = DEFAULT_PATH_RULES_FILE,
+        input_type = "text",
+        buttons = {
+            {
+                {
+                    text = _("Cancel"),
+                    callback = function()
+                        UIManager:close(input_dialog)
+                    end,
+                },
+                {
+                    text = _("Save"),
+                    callback = function()
+                        self.path_rules_file = input_dialog:getInputText()
+                        if self.path_rules_file == "" then
+                            self.path_rules_file = DEFAULT_PATH_RULES_FILE
+                        end
+                        self:saveSettings()
+                        UIManager:close(input_dialog)
+
+                        UIManager:show(InfoMessage:new{
+                            text = _("Custom rules path saved."),
                             timeout = 2,
                         })
                     end,
@@ -1064,27 +1193,21 @@ function GrimmorySync:convertAuthorName(author)
     end
 end
 
-function GrimmorySync:generateTargetPath(book)
-    -- Generate target directory path based on genres and series
-    -- Follows the same logic as Calibre save template
-    
-    local function hasGenre(genres, name)
-        if not genres then return false end
-        for _, genre in ipairs(genres) do
-            if genre == name then return true end
-        end
-        return false
+function GrimmorySync:hasGenre(genres, name)
+    if not genres or not name then return false end
+    for _, genre in ipairs(genres) do
+        if genre == name then return true end
     end
-    
-    local function sanitizeForPath(str)
-        if not str or str == "" then return str end
-        
-        -- Trim leading/trailing whitespace (including newlines from XML parsing)
-        str = str:gsub("^%s+", ""):gsub("%s+$", "")
-        if str == "" then return str end
-        
-        -- Move leading articles to the end (for proper sorting)
-        -- "The Bugle Call" → "Bugle Call, The"
+    return false
+end
+
+function GrimmorySync:sanitizePathComponent(str, sort_articles)
+    if not str or str == "" then return "" end
+
+    str = tostring(str):gsub("^%s+", ""):gsub("%s+$", "")
+    if str == "" then return "" end
+
+    if sort_articles ~= false then
         local article, rest
         article, rest = str:match("^(The)%s+(.+)$")
         if article and rest then
@@ -1100,58 +1223,237 @@ function GrimmorySync:generateTargetPath(book)
                 end
             end
         end
-        
-        -- Replace colon with underscore (Android/KOReader doesn't support colons in folder names)
-        str = str:gsub(":", "_")
-        
-        return str
     end
-    
-    local author_sort = self:convertAuthorName(book.author) or "Unknown"
-    local series = book.series
-    local series_index = book.series_index
-    
-    -- Sanitize series name for use in paths
-    if series and series ~= "" then
-        series = sanitizeForPath(series)
+
+    return str:gsub(":", "_"):gsub("/", "_"):gsub("\\", "_")
+end
+
+function GrimmorySync:normalizeTargetSubdir(subdir)
+    if type(subdir) ~= "string" then return "" end
+
+    subdir = subdir:gsub("\\", "/"):gsub("^%s+", ""):gsub("%s+$", "")
+    subdir = subdir:gsub("^/+", ""):gsub("/+$", "")
+    if subdir == "" then return "" end
+
+    local parts = {}
+    for part in subdir:gmatch("[^/]+") do
+        local sanitized = self:sanitizePathComponent(part, false)
+        if sanitized ~= "" and sanitized ~= "." and sanitized ~= ".." then
+            parts[#parts + 1] = sanitized
+        end
     end
-    if author_sort and author_sort ~= "" then
-        author_sort = sanitizeForPath(author_sort)
+
+    return table.concat(parts, "/")
+end
+
+function GrimmorySync:joinTargetPath(...)
+    local parts = {}
+    for i = 1, select("#", ...) do
+        local part = self:normalizeTargetSubdir(select(i, ...))
+        if part ~= "" then
+            parts[#parts + 1] = part
+        end
     end
-    
-    -- Check genres in priority order
-    if hasGenre(book.genres, "Serier") then
-        if not series or series == "" then
+    return table.concat(parts, "/")
+end
+
+function GrimmorySync:primaryGenre(book)
+    for _, genre in ipairs(book.genres or {}) do
+        local sanitized = self:sanitizePathComponent(genre, false)
+        if sanitized ~= "" then
+            return sanitized
+        end
+    end
+    return ""
+end
+
+function GrimmorySync:authorSortName(book)
+    return self:sanitizePathComponent(self:convertAuthorName(book.author) or "Unknown")
+end
+
+function GrimmorySync:seriesPathName(book)
+    return self:sanitizePathComponent(book.series or "")
+end
+
+function GrimmorySync:flatTargetPath()
+    return ""
+end
+
+function GrimmorySync:authorTargetPath(book)
+    return self:authorSortName(book)
+end
+
+function GrimmorySync:genreSeriesTargetPath(book)
+    local genre = self:primaryGenre(book)
+    local series = self:seriesPathName(book)
+
+    if genre ~= "" and series ~= "" then
+        return self:joinTargetPath(genre, series)
+    end
+    return genre
+end
+
+function GrimmorySync:robinLegacyTargetPath(book)
+    local author_sort = self:authorSortName(book)
+    local series = self:seriesPathName(book)
+
+    if self:hasGenre(book.genres, "Serier") then
+        if series == "" then
             return "Serier"
         else
             return "Serier/" .. series
         end
-    elseif hasGenre(book.genres, "Manga") then
-        if not series or series == "" then
+    elseif self:hasGenre(book.genres, "Manga") then
+        if series == "" then
             return "Manga/Oneshots"
         else
             return "Manga/" .. series
         end
-    elseif hasGenre(book.genres, "Light novel") then
-        if not series or series == "" then
+    elseif self:hasGenre(book.genres, "Light novel") then
+        if series == "" then
             return "Light novels"
         else
             return "Light novels/" .. series
         end
-    elseif hasGenre(book.genres, "Facklitteratur") then
+    elseif self:hasGenre(book.genres, "Facklitteratur") then
         return "Facklitteratur"
-    elseif hasGenre(book.genres, "Lyrik") then
+    elseif self:hasGenre(book.genres, "Lyrik") then
         return "Lyrik"
-    elseif hasGenre(book.genres, "Fiktion") then
-        if not series or series == "" then
+    elseif self:hasGenre(book.genres, "Fiktion") then
+        if series == "" then
             return "Fiktion"
         else
             return "Fiktion/" .. author_sort .. " - " .. series
         end
-    else
-        -- No matching genre - place in root ePubs directory
+    end
+
+    return ""
+end
+
+function GrimmorySync:pathRuleHelpers()
+    return {
+        has_genre = function(book, name)
+            return self:hasGenre(book and book.genres, name)
+        end,
+        author_sort = function(book)
+            return self:authorSortName(book or {})
+        end,
+        series = function(book)
+            return self:seriesPathName(book or {})
+        end,
+        primary_genre = function(book)
+            return self:primaryGenre(book or {})
+        end,
+        join = function(...)
+            return self:joinTargetPath(...)
+        end,
+        sanitize = function(value)
+            return self:sanitizePathComponent(value)
+        end,
+    }
+end
+
+function GrimmorySync:formatPathTemplate(template, book, helpers)
+    if type(template) ~= "string" then return "" end
+    local values = {
+        author = helpers.author_sort(book),
+        author_sort = helpers.author_sort(book),
+        genre = helpers.primary_genre(book),
+        series = helpers.series(book),
+        title = self:sanitizePathComponent(book.title or ""),
+    }
+    return template:gsub("{([%w_]+)}", function(key)
+        return values[key] or ""
+    end)
+end
+
+function GrimmorySync:customRuleMatches(rule, book, helpers)
+    if type(rule.when) == "function" then
+        local ok, result = pcall(rule.when, book, helpers)
+        return ok and result == true
+    end
+
+    local genres = rule.genres or rule.genre
+    if type(genres) == "string" then
+        genres = { genres }
+    end
+    if type(genres) == "table" then
+        for _, genre in ipairs(genres) do
+            if helpers.has_genre(book, genre) then
+                return true
+            end
+        end
+        return false
+    end
+
+    return true
+end
+
+function GrimmorySync:evaluateCustomRuleTable(rules, book, helpers)
+    local rule_list = rules.rules or rules
+    if type(rule_list) ~= "table" then return "" end
+
+    for _, rule in ipairs(rule_list) do
+        if type(rule) == "table" and self:customRuleMatches(rule, book, helpers) then
+            if rule.series == true and helpers.series(book) == "" and rule.fallback then
+                return self:formatPathTemplate(rule.fallback, book, helpers)
+            end
+            return self:formatPathTemplate(rule.path or rule.folder or "", book, helpers)
+        end
+    end
+
+    return self:formatPathTemplate(rules.fallback or "", book, helpers)
+end
+
+function GrimmorySync:customTargetPath(book)
+    local rules_path = self.path_rules_file or DEFAULT_PATH_RULES_FILE
+    local ok, rules = pcall(dofile, rules_path)
+    if not ok then
+        logger.warn("[GrimmorySync] Could not load custom path rules:", rules_path, rules)
         return ""
     end
+
+    local helpers = self:pathRuleHelpers()
+    local ok_resolve, result
+    if type(rules) == "function" then
+        ok_resolve, result = pcall(rules, book, helpers)
+    elseif type(rules) == "table" and type(rules.resolve) == "function" then
+        ok_resolve, result = pcall(rules.resolve, book, helpers)
+    elseif type(rules) == "table" then
+        ok_resolve, result = pcall(function()
+            return self:evaluateCustomRuleTable(rules, book, helpers)
+        end)
+    else
+        logger.warn("[GrimmorySync] Custom path rules must return a function or table:", rules_path)
+        return ""
+    end
+
+    if not ok_resolve then
+        logger.warn("[GrimmorySync] Custom path rules failed:", result)
+        return ""
+    end
+
+    return result or ""
+end
+
+function GrimmorySync:generateTargetPath(book)
+    book = book or {}
+    local profile = self.routing_profile or ROUTING_PROFILE_FLAT
+    local target_subdir
+
+    if profile == ROUTING_PROFILE_ROBIN_LEGACY then
+        target_subdir = self:robinLegacyTargetPath(book)
+    elseif profile == ROUTING_PROFILE_AUTHOR then
+        target_subdir = self:authorTargetPath(book)
+    elseif profile == ROUTING_PROFILE_GENRE_SERIES then
+        target_subdir = self:genreSeriesTargetPath(book)
+    elseif profile == ROUTING_PROFILE_CUSTOM then
+        target_subdir = self:customTargetPath(book)
+    else
+        target_subdir = self:flatTargetPath(book)
+    end
+
+    return self:normalizeTargetSubdir(target_subdir)
 end
 
 function GrimmorySync:generatePossibleFilenames(book)
@@ -2857,11 +3159,13 @@ end
 function GrimmorySync:showStatus()
     local books = self:scanLocalBooks()
     local text = string.format(
-        "Server: %s\nUser: %s\nPath: %s\nLocal: %d books\nAuthor images: %s\nAuthor image path: %s",
+        "Server: %s\nUser: %s\nPath: %s\nLocal: %d books\nFolder profile: %s\nCustom rules: %s\nAuthor images: %s\nAuthor image path: %s",
         self.server_url ~= "" and self.server_url or "Not set",
         self.username ~= "" and self.username or "Not set",
         self.local_path,
         #books,
+        self:routingProfileLabel(self.routing_profile or ROUTING_PROFILE_FLAT),
+        self.path_rules_file or DEFAULT_PATH_RULES_FILE,
         self.sync_author_images ~= false and "on" or "off",
         self:authorImagesPath()
     )

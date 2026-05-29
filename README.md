@@ -10,7 +10,7 @@ A KOReader plugin that syncs books from a Grimmory OPDS server to a local device
 - Automatic downloads for missing books.
 - Manifest-based metadata refresh for existing local books by safely re-downloading only changed or previously untracked EPUB files.
 - Manual OTA update checks and installation from GitHub Releases.
-- Folder placement based on Grimmory genres/tags, including Manga, Serier, Light novels, Fiktion, Facklitteratur, and Lyrik.
+- Configurable download folder profiles, including neutral defaults and optional custom path rules.
 - Recent-download history with quick open from KOReader.
 
 ## Installation
@@ -46,6 +46,20 @@ Set:
 - `Local book path`, default `/storage/emulated/0/ePubs`.
 
 Credentials are stored locally in KOReader's storage as plain text because this plugin follows KOReader's simple plugin-settings style. Use it on a trusted device/network.
+
+### Download Folder Profiles
+
+The menu item `Download folder profile` controls where newly downloaded books are placed under the local book path:
+
+- `Library root`: put every downloaded EPUB directly in the configured library folder.
+- `Author folders`: put books under an author-sort folder.
+- `Genre/series folders`: put books under the first Grimmory genre/tag, then under the series when present.
+- `Custom rules file`: read rules from `/storage/emulated/0/koreader/grimmory_sync_path_rules.lua`, or another path configured from the same menu.
+- `Robin legacy folders`: the old Swedish personal layout for Manga, Serier, Light novels, Fiktion, Facklitteratur, and Lyrik.
+
+New installations default to `Library root`. Existing installations without a saved folder profile are treated as `Robin legacy folders` to avoid moving an established personal library layout.
+
+Custom rules may return either a Lua table or a function. A table-based example is included in `examples/path_rules.lua`.
 
 ## Usage
 
@@ -96,7 +110,7 @@ Downloaded files are named as:
 Author, Firstname - Title.epub
 ```
 
-Books are placed into subfolders according to tags/genres returned by the OPDS feed.
+Books are placed according to the selected download folder profile.
 
 ## Notes
 
@@ -105,7 +119,7 @@ Books are placed into subfolders according to tags/genres returned by the OPDS f
 - Metadata refresh uses `grimmory_sync_manifest.lua` and compares stable metadata such as title, author, series, tags, description, and Hardcover IDs when available from Grimmory's authenticated book API.
 - Author image sync uses Grimmory's authenticated `/api/v1/authors` and `/api/v1/media/author/{id}/photo` endpoints, and writes exact/slugged Bookshelf-compatible filenames.
 - OTA updates require a release asset named `grimmory-sync.koplugin.zip`.
-- The folder placement rules are tailored for a Swedish personal library layout. Adjust `generateTargetPath()` if your taxonomy differs.
+- Custom folder placement should live outside the plugin folder so OTA updates do not overwrite it.
 - KOReader must have network access to the Grimmory server.
 - Existing `booklore_sync_settings.txt` and `booklore_sync_history.lua` files are read as legacy fallbacks, but new saves use `grimmory_sync_*` files.
 
