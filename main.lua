@@ -1221,8 +1221,10 @@ end
 
 function GrimmorySync:hasGenre(genres, name)
     if not genres or not name then return false end
+    local normalized_name = trim(tostring(name)):lower()
+    if normalized_name == "" then return false end
     for _, genre in ipairs(genres) do
-        if genre == name then return true end
+        if trim(tostring(genre or "")):lower() == normalized_name then return true end
     end
     return false
 end
@@ -1361,6 +1363,15 @@ function GrimmorySync:pathRuleHelpers()
         has_genre = function(book, name)
             return self:hasGenre(book and book.genres, name)
         end,
+        has_tag = function(book, name)
+            return self:hasGenre(book and book.genres, name)
+        end,
+        has_author = function(book, name)
+            return self:ruleValueMatches({
+                book and book.author,
+                self:authorSortName(book or {}),
+            }, name)
+        end,
         author_sort = function(book)
             return self:authorSortName(book or {})
         end,
@@ -1393,13 +1404,46 @@ function GrimmorySync:formatPathTemplate(template, book, helpers)
     end)
 end
 
+function GrimmorySync:ruleValues(value)
+    if value == nil then return nil end
+    if type(value) == "table" then return value end
+    return { value }
+end
+
+function GrimmorySync:ruleValueMatches(candidates, values)
+    candidates = self:ruleValues(candidates)
+    values = self:ruleValues(values)
+    if not candidates or not values then return true end
+
+    for _, candidate in ipairs(candidates) do
+        local normalized_candidate = trim(tostring(candidate or "")):lower()
+        if normalized_candidate ~= "" then
+            for _, value in ipairs(values) do
+                if normalized_candidate == trim(tostring(value or "")):lower() then
+                    return true
+                end
+            end
+        end
+    end
+
+    return false
+end
+
 function GrimmorySync:customRuleMatches(rule, book, helpers)
     if type(rule.when) == "function" then
         local ok, result = pcall(rule.when, book, helpers)
         return ok and result == true
     end
 
-    local genres = rule.genres or rule.genre
+    local authors = rule.authors or rule.author or rule.author_sort
+    if authors and not self:ruleValueMatches({
+        book and book.author,
+        helpers.author_sort(book),
+    }, authors) then
+        return false
+    end
+
+    local genres = rule.genres or rule.genre or rule.tags or rule.tag
     if type(genres) == "string" then
         genres = { genres }
     end

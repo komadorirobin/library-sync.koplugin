@@ -59,7 +59,7 @@ The menu item `Download folder profile` controls where newly downloaded books ar
 
 New installations default to `Library root`. Existing installations without a saved folder profile are treated as `Swedish genre example` to avoid moving an established personal library layout. Older saved personal-layout settings are migrated automatically.
 
-Custom rules may return either a Lua table or a function. A table-based example is included in `examples/path_rules.lua`.
+Custom rules may return either a Lua table or a function. Table rules can match `genre`/`genres`, `tag`/`tags`, `author`/`authors`, or a custom `when(book, helpers)` function. Grimmory OPDS categories are exposed as the same genre/tag list. A table-based example is included in `examples/path_rules.lua`.
 
 ## Usage
 
