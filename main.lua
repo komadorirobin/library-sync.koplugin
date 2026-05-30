@@ -221,6 +221,8 @@ function GrimmorySync:loadSettings()
             sync_author_images = false,
             routing_profile = ROUTING_PROFILE_FLAT,
             path_rules_file = DEFAULT_PATH_RULES_FILE,
+            selected_feed = "",
+            selected_feed_label = "",
         }
     end
     
@@ -250,6 +252,8 @@ function GrimmorySync:loadSettings()
         sync_author_images = settingToBool(settings.sync_author_images, true),
         routing_profile = routing_profile,
         path_rules_file = settings.path_rules_file or DEFAULT_PATH_RULES_FILE,
+        selected_feed = settings.selected_feed or "",
+        selected_feed_label = settings.selected_feed_label or "",
     }
 end
 
@@ -267,6 +271,8 @@ function GrimmorySync:saveSettings()
     file:write("sync_author_images=" .. boolToSetting(self.sync_author_images ~= false) .. "\n")
     file:write("routing_profile=" .. (self.routing_profile or ROUTING_PROFILE_FLAT) .. "\n")
     file:write("path_rules_file=" .. (self.path_rules_file or DEFAULT_PATH_RULES_FILE) .. "\n")
+    file:write("selected_feed=" .. (self.selected_feed or "") .. "\n")
+    file:write("selected_feed_label=" .. (self.selected_feed_label or "") .. "\n")
     file:close()
 end
 
@@ -445,6 +451,8 @@ function GrimmorySync:init()
     self.sync_author_images = settings.sync_author_images ~= false
     self.routing_profile = settings.routing_profile
     self.path_rules_file = settings.path_rules_file
+    self.selected_feed = settings.selected_feed or ""
+    self.selected_feed_label = settings.selected_feed_label or ""
 end
 
 function GrimmorySync:addToMainMenu(menu_items)
@@ -500,6 +508,12 @@ function GrimmorySync:addToMainMenu(menu_items)
                     self:runAfterMenuClose(touchmenu_instance, function()
                         self:showServerConfig()
                     end)
+                end,
+            },
+            {
+                text = _("Select shelf to sync"),
+                sub_item_table_func = function()
+                    return self:getShelfSelectionMenu()
                 end,
             },
             {
@@ -927,6 +941,117 @@ function GrimmorySync:makeRequest(endpoint)
     return body, nil
 end
 
+function GrimmorySync:fetchShelves()
+    -- Fetch the navigation feeds that contain acquisition sub-feeds we can sync.
+    -- Aggregates personal shelves and magic (dynamic) shelves into one list.
+    local sources = {
+        { endpoint = "/api/v1/opds/shelves", prefix = "" },
+        { endpoint = "/api/v1/opds/magic-shelves", prefix = "[Magic] " },
+    }
+    local shelves = {}
+    local any_ok = false
+    local last_err
+    for _, source in ipairs(sources) do
+        local response, err = self:makeRequest(source.endpoint)
+        if response then
+            any_ok = true
+            for entry in response:gmatch("<entry>(.-)</entry>") do
+                local title = entry:match("<title>(.-)</title>")
+                local href
+                for link in entry:gmatch('<link([^>]*)') do
+                    local rel = link:match('rel="([^"]+)"')
+                    local type_attr = link:match('type="([^"]+)"')
+                    -- Only follow links that lead to an acquisition feed (actual books)
+                    if href == nil and (
+                        (type_attr and type_attr:match("acquisition"))
+                        or (rel and rel:match("subsection"))
+                    ) then
+                        local candidate = link:match('href="([^"]+)"') or link:match("href='([^']+)'")
+                        if candidate then
+                            href = candidate:gsub("&amp;", "&")
+                            -- Prefer acquisition feeds; keep looking if this was only a navigation subsection
+                            if type_attr and type_attr:match("acquisition") then
+                                break
+                            end
+                        end
+                    end
+                end
+                if title then
+                    title = title:gsub("&amp;", "&")
+                        :gsub("&apos;", "'")
+                        :gsub("&#39;", "'")
+                        :gsub("&quot;", '"')
+                        :gsub("&lt;", "<")
+                        :gsub("&gt;", ">")
+                end
+                if title and href then
+                    shelves[#shelves + 1] = { label = source.prefix .. title, href = href }
+                end
+            end
+        else
+            last_err = err
+        end
+    end
+    if not any_ok then
+        return nil, last_err or _("Could not load shelves")
+    end
+    return shelves, nil
+end
+
+function GrimmorySync:getShelfSelectionMenu()
+    local items = {
+        {
+            text = _("All books (default)"),
+            checked_func = function()
+                return (self.selected_feed or "") == ""
+            end,
+            keep_menu_open = true,
+            callback = function()
+                self.selected_feed = ""
+                self.selected_feed_label = ""
+                self:saveSettings()
+            end,
+        },
+        { text = "———", enabled = false },
+    }
+
+    local shelves, err = self:fetchShelves()
+    if not shelves then
+        items[#items + 1] = {
+            text = string.format(_("Could not load shelves: %s"), tostring(err)),
+            enabled = false,
+        }
+        return items
+    end
+
+    if #shelves == 0 then
+        items[#items + 1] = {
+            text = _("No shelves found on server"),
+            enabled = false,
+        }
+        return items
+    end
+
+    for _, shelf in ipairs(shelves) do
+        local href = shelf.href
+        local label = shelf.label
+        items[#items + 1] = {
+            text = label,
+            checked_func = function()
+                return self.selected_feed == href
+            end,
+            keep_menu_open = true,
+            callback = function()
+                self.selected_feed = href
+                self.selected_feed_label = label
+                self:saveSettings()
+            end,
+        }
+    end
+
+    return items
+end
+
 function GrimmorySync:fetchBooklistFromGrimmory()
     logger.info("[GrimmorySync] Fetching books from:", self.server_url)
     logger.info("[GrimmorySync] Username:", self.username)
@@ -951,23 +1076,31 @@ function GrimmorySync:fetchBooklistFromGrimmory()
         return nil, err
     end
     
-    -- Find the "All Books" catalog link
+    -- Determine which acquisition feed to follow.
+    -- If the user selected a specific shelf, use its feed directly; otherwise
+    -- fall back to discovering the "All Books"/"Catalog" link from the root feed.
     local catalog_link
-    for entry in root_response:gmatch("<entry>(.-)</entry>") do
-        local title = entry:match("<title>(.-)</title>")
-        if title and (title:match("All Books") or title:match("Catalog")) then
-            for link in entry:gmatch('<link([^>]*)') do
-                catalog_link = link:match('href="([^"]+)"') or link:match("href='([^']+)'")
-                if catalog_link then
-                    -- Decode HTML entities
-                    catalog_link = catalog_link:gsub("&amp;", "&")
-                    break
+    if self.selected_feed and self.selected_feed ~= "" then
+        catalog_link = self.selected_feed
+        logger.info("[GrimmorySync] Using selected feed:",
+            self.selected_feed_label or "(unnamed)", catalog_link)
+    else
+        for entry in root_response:gmatch("<entry>(.-)</entry>") do
+            local title = entry:match("<title>(.-)</title>")
+            if title and (title:match("All Books") or title:match("Catalog")) then
+                for link in entry:gmatch('<link([^>]*)') do
+                    catalog_link = link:match('href="([^"]+)"') or link:match("href='([^']+)'")
+                    if catalog_link then
+                        -- Decode HTML entities
+                        catalog_link = catalog_link:gsub("&amp;", "&")
+                        break
+                    end
                 end
             end
+            if catalog_link then break end
         end
-        if catalog_link then break end
     end
-    
+
     if not catalog_link then
         return nil, _("Could not find 'All Books' catalog link in OPDS feed")
     end
@@ -3228,12 +3361,16 @@ end
 
 function GrimmorySync:showStatus()
     local books = self:scanLocalBooks()
+    local sync_source = (self.selected_feed and self.selected_feed ~= "")
+        and (self.selected_feed_label ~= "" and self.selected_feed_label or self.selected_feed)
+        or _("All books")
     local text = string.format(
-        _("Server: %s\nUser: %s\nPath: %s\nLocal: %d books\nFolder profile: %s\nCustom rules: %s\nBookshelf author images: %s\nBookshelf image path: %s"),
+        _("Server: %s\nUser: %s\nPath: %s\nLocal: %d books\nSync source: %s\nFolder profile: %s\nCustom rules: %s\nBookshelf author images: %s\nBookshelf image path: %s"),
         self.server_url ~= "" and self.server_url or _("Not set"),
         self.username ~= "" and self.username or _("Not set"),
         self.local_path,
         #books,
+        sync_source,
         self:routingProfileLabel(self.routing_profile or ROUTING_PROFILE_FLAT),
         self.path_rules_file or DEFAULT_PATH_RULES_FILE,
         self.sync_author_images ~= false and _("on") or _("off"),
