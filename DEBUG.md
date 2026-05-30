@@ -1,11 +1,13 @@
 # 🐛 Felsökningsguide - Plugin syns inte
 
+I exemplen betyder `<koreader>` KOReaders användarmapp på din enhet, alltså mappen som innehåller `plugins/` och `crash.log`.
+
 ## Steg 1: Verifiera filstrukturen
 
 Kontrollera att du har EXAKT denna struktur på din e-läsare:
 
 ```
-/koreader/
+<koreader>/
   └── plugins/
       └── grimmory-sync.koplugin/
           ├── _meta.lua
@@ -33,21 +35,11 @@ Kontrollera att du har EXAKT denna struktur på din e-läsare:
 
 ## Steg 3: Kontrollera var KOReader letar
 
-KOReader kan leta på olika platser beroende på installation:
+KOReader kan leta på olika platser beroende på plattform och installation. Leta efter den mapp som innehåller KOReaders `plugins/`-mapp.
 
-### Alternativ A: Intern lagring
+### Förväntad struktur
 ```
-/storage/emulated/0/koreader/plugins/grimmory-sync.koplugin/
-```
-
-### Alternativ B: Appens datamapp
-```
-/data/data/org.koreader.launcher/files/koreader/plugins/grimmory-sync.koplugin/
-```
-
-### Alternativ C: SD-kort (om du har)
-```
-/storage/sdcard1/koreader/plugins/grimmory-sync.koplugin/
+<koreader>/plugins/grimmory-sync.koplugin/
 ```
 
 ## Steg 4: Hitta rätt plats via KOReader
@@ -57,8 +49,8 @@ KOReader kan leta på olika platser beroende på installation:
 3. Eller installera ett existerande plugin för att se var plugins ligger
 
 **Enklare metod:**
-1. Använd en filhanterare-app på Bigme
-2. Sök efter "koreader" 
+1. Använd en filhanterare-app på enheten
+2. Sök efter "koreader"
 3. Hitta `plugins`-mappen
 4. Lägg pluginet där
 
@@ -74,11 +66,11 @@ Vissa äldre versioner av KOReader kanske inte stöder alla funktioner.
 
 ## Steg 6: Manuell syntax-kontroll
 
-Om du har tillgång till en terminal på Bigme:
+Om du har tillgång till en terminal på enheten:
 
 ```bash
 # Testa Lua-syntax
-cd /koreader/plugins/grimmory-sync.koplugin/
+cd <koreader>/plugins/grimmory-sync.koplugin/
 luac -p main.lua
 
 # Om fel, byt till minimal version:
@@ -89,7 +81,7 @@ mv test-minimal.lua main.lua
 ## Steg 7: Kolla KOReader-loggen
 
 1. Stäng KOReader
-2. Med filhanterare, gå till `/koreader/` 
+2. Med filhanterare, gå till `<koreader>/`
 3. Öppna `crash.log` med textläsare
 4. Leta efter:
    - `grimmorysync`
@@ -121,8 +113,8 @@ Om ingenting fungerar, prova denna metod:
    - Lägg ditt plugin i SAMMA mapp
 
 3. **Exempel:**
-   - Om du hittar: `/data/media/0/koreader/plugins/statistics.koplugin/`
-   - Kopiera din mapp till: `/data/media/0/koreader/plugins/grimmory-sync.koplugin/`
+   - Om du hittar: `<koreader>/plugins/statistics.koplugin/`
+   - Kopiera din mapp till: `<koreader>/plugins/grimmory-sync.koplugin/`
 
 ## Steg 9: ADB-metoden (Avancerat)
 
@@ -171,5 +163,5 @@ Skicka denna information:
 2. **Vad säger crash.log?** (om något)
 3. **Vilken KOReader-version?** (Hjälp → Om)
 4. **Andra plugins fungerar?** (vilka?)
-5. **Bigme B7 Pro firmware-version?**
+5. **Vilken enhet och firmware-version?**
 6. **Har du provat minimal version?** (test-minimal.lua)

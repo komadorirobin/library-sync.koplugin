@@ -18,8 +18,10 @@ A KOReader plugin that syncs books from a Grimmory OPDS server to a local device
 Copy the plugin folder to KOReader's plugin directory:
 
 ```text
-/storage/emulated/0/koreader/plugins/grimmory-sync.koplugin/
+<koreader>/plugins/grimmory-sync.koplugin/
 ```
+
+In this README, `<koreader>` means KOReader's user storage directory on your device, and `<library>` means the book-library folder you configure in Grimmory Sync.
 
 The directory must contain at least:
 
@@ -43,7 +45,7 @@ Set:
 - `Server URL`, for example `http://192.168.1.100:6060`.
 - `Username`, optional.
 - `Password`, optional.
-- `Local book path`, default `/storage/emulated/0/ePubs`.
+- `Local book path`, for example `<library>/ePubs` or another folder where KOReader can read and write books.
 
 Credentials are stored locally in KOReader's storage as plain text because this plugin follows KOReader's simple plugin-settings style. Use it on a trusted device/network.
 
@@ -54,7 +56,7 @@ The menu item `Download folder profile` controls where newly downloaded books ar
 - `Library root`: put every downloaded EPUB directly in the configured library folder.
 - `Author folders`: put books under an author-sort folder.
 - `Genre/series folders`: put books under the first Grimmory genre/tag, then under the series when present.
-- `Custom rules file`: read rules from `/storage/emulated/0/koreader/grimmory_sync_path_rules.lua`, or another path configured from the same menu.
+- `Custom rules file`: read rules from `<koreader>/grimmory_sync_path_rules.lua`, or another path configured from the same menu.
 - `Swedish genre example`: an example layout for Swedish tags such as Manga, Serier, Light novels, Fiktion, Facklitteratur, and Lyrik.
 
 New installations default to `Library root`. Existing installations without a saved folder profile are treated as `Swedish genre example` to avoid moving an established personal library layout. Older saved personal-layout settings are migrated automatically.
@@ -135,7 +137,7 @@ See [DEBUG.md](DEBUG.md) and [INSTALL.md](INSTALL.md) for device-specific setup 
 KOReader logs are usually in:
 
 ```text
-/storage/emulated/0/koreader/crash.log
+<koreader>/crash.log
 ```
 
 Search for:
