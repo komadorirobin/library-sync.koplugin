@@ -63,6 +63,16 @@ New installations default to `Library root`. Existing installations without a sa
 
 Custom rules may return either a Lua table or a function. Table rules can match `genre`/`genres`, `tag`/`tags`, `author`/`authors`, or a custom `when(book, helpers)` function. Grimmory OPDS categories are exposed as the same genre/tag list. A table-based example is included in `examples/path_rules.lua`.
 
+### Sync Source
+
+The menu item `Select shelf to sync` controls which Grimmory OPDS feed is used as the remote source:
+
+- `All books (default)`: sync from Grimmory's full OPDS catalogue.
+- Personal shelves: sync only books from a selected Grimmory shelf.
+- Magic shelves: sync only books from a selected Grimmory dynamic shelf.
+
+The selected sync source applies to both `Sync missing books` and `Refresh existing metadata`. For example, if a Manga magic shelf is selected, metadata refresh only considers local books that can be matched against that shelf's OPDS feed. Switch back to `All books (default)` to refresh against the full catalogue.
+
 ## Usage
 
 To download books that exist in Grimmory but are missing locally, run:

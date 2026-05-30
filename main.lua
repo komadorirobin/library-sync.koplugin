@@ -946,7 +946,7 @@ function GrimmorySync:fetchShelves()
     -- Aggregates personal shelves and magic (dynamic) shelves into one list.
     local sources = {
         { endpoint = "/api/v1/opds/shelves", prefix = "" },
-        { endpoint = "/api/v1/opds/magic-shelves", prefix = "[Magic] " },
+        { endpoint = "/api/v1/opds/magic-shelves", prefix = _("[Magic] ") },
     }
     local shelves = {}
     local any_ok = false
