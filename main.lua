@@ -110,6 +110,67 @@ local function trim(str)
     return str:gsub("^%s+", ""):gsub("%s+$", "")
 end
 
+local function unicodeChar(code)
+    code = tonumber(code)
+    if not code then return "" end
+    if code < 0x80 then
+        return string.char(code)
+    elseif code < 0x800 then
+        return string.char(
+            0xC0 + math.floor(code / 0x40),
+            0x80 + (code % 0x40)
+        )
+    elseif code < 0x10000 then
+        return string.char(
+            0xE0 + math.floor(code / 0x1000),
+            0x80 + (math.floor(code / 0x40) % 0x40),
+            0x80 + (code % 0x40)
+        )
+    end
+    return ""
+end
+
+local function xmlDecode(value)
+    if type(value) ~= "string" then return nil end
+    value = value:gsub("&amp;", "&")
+        :gsub("&apos;", "'")
+        :gsub("&#39;", "'")
+        :gsub("&quot;", '"')
+        :gsub("&lt;", "<")
+        :gsub("&gt;", ">")
+    value = value:gsub("&#x(%x+);", function(hex)
+        return unicodeChar(tonumber(hex, 16))
+    end)
+    value = value:gsub("&#(%d+);", function(decimal)
+        return unicodeChar(decimal)
+    end)
+    return value
+end
+
+local function xmlText(value)
+    if type(value) ~= "string" then return nil end
+    value = value:gsub("<!%[CDATA%[(.-)%]%]>", "%1")
+    value = value:gsub("<[^>]+>", "")
+    value = xmlDecode(value) or value
+    value = value:gsub("%s+", " ")
+    value = trim(value)
+    return value ~= "" and value or nil
+end
+
+local function xmlAttr(attrs, name)
+    if type(attrs) ~= "string" then return nil end
+    local quoted = attrs:match(name .. '%s*=%s*"([^"]*)"')
+        or attrs:match(name .. "%s*=%s*'([^']*)'")
+    return quoted and xmlDecode(quoted) or nil
+end
+
+local function urlDecode(value)
+    if type(value) ~= "string" then return nil end
+    return value:gsub("+", " "):gsub("%%(%x%x)", function(hex)
+        return string.char(tonumber(hex, 16))
+    end)
+end
+
 local function jsonString(value)
     value = tostring(value or "")
     value = value:gsub("\\", "\\\\")
@@ -593,6 +654,7 @@ function GrimmorySync:init()
         self.ui.menu:registerToMainMenu(self)
     end
     self:onDispatcherRegisterActions()
+    self:registerFileDialogButtons()
     
     local settings = self:loadSettings()
     self.server_url = settings.server_url
@@ -633,6 +695,38 @@ function GrimmorySync:onDispatcherRegisterActions()
         title = _("Grimmory Sync: Refresh existing metadata"),
         general = true,
     })
+    Dispatcher:registerAction("grimmory_refresh_open_book_metadata", {
+        category = "none",
+        event = "GrimmoryRefreshOpenBookMetadata",
+        title = _("Grimmory Sync: Refresh open book metadata"),
+        general = true,
+    })
+end
+
+function GrimmorySync:registerFileDialogButtons()
+    local ok_filemanager, FileManager = pcall(require, "apps/filemanager/filemanager")
+    if not ok_filemanager or not FileManager or type(FileManager.addFileDialogButtons) ~= "function" then
+        return
+    end
+
+    FileManager:addFileDialogButtons("grimmory_refresh_metadata", function(file, is_file)
+        if not is_file or not self:isEpubPath(file) then
+            return nil
+        end
+
+        return {
+            {
+                text = _("Refresh Grimmory metadata"),
+                callback = function()
+                    local file_chooser = FileManager.instance and FileManager.instance.file_chooser
+                    if file_chooser and file_chooser.file_dialog then
+                        UIManager:close(file_chooser.file_dialog)
+                    end
+                    self:startMetadataRefreshForFile(file)
+                end,
+            },
+        }
+    end)
 end
 
 function GrimmorySync:addToMainMenu(menu_items)
@@ -653,6 +747,17 @@ function GrimmorySync:addToMainMenu(menu_items)
                 callback = function(touchmenu_instance)
                     self:runAfterMenuClose(touchmenu_instance, function()
                         self:startMetadataRefresh()
+                    end)
+                end,
+            },
+            {
+                text = _("Refresh open book metadata"),
+                enabled_func = function()
+                    return self:currentDocumentPath() ~= nil
+                end,
+                callback = function(touchmenu_instance)
+                    self:runAfterMenuClose(touchmenu_instance, function()
+                        self:startMetadataRefreshForOpenBook()
                     end)
                 end,
             },
@@ -1217,6 +1322,159 @@ function GrimmorySync:makeRequest(endpoint)
     return body, nil
 end
 
+function GrimmorySync:opdsLinks(entry)
+    local links = {}
+    if type(entry) ~= "string" then
+        return links
+    end
+
+    for attrs in entry:gmatch("<link%s+([^>]*)>") do
+        local href = xmlAttr(attrs, "href")
+        if href and href ~= "" then
+            links[#links + 1] = {
+                href = href:gsub("&amp;", "&"),
+                rel = xmlAttr(attrs, "rel") or "",
+                type = xmlAttr(attrs, "type") or "",
+                title = xmlAttr(attrs, "title") or "",
+                attrs = attrs,
+            }
+        end
+    end
+
+    return links
+end
+
+function GrimmorySync:isOpdsAcquisitionLink(link)
+    local rel = tostring(link and link.rel or ""):lower()
+    return rel:match("acquisition") ~= nil
+end
+
+function GrimmorySync:isLikelyBookDownloadLink(link)
+    if not self:isOpdsAcquisitionLink(link) then
+        return false, "not acquisition"
+    end
+
+    local href = tostring(link.href or "")
+    local href_lower = href:lower()
+    local type_lower = tostring(link.type or ""):lower()
+
+    if type_lower:match("image") or type_lower:match("atom") or type_lower:match("opds") then
+        return false, type_lower ~= "" and type_lower or "navigation/media"
+    end
+
+    if type_lower:match("epub") or href_lower:match("%.epub") then
+        return true, "epub"
+    end
+
+    if href_lower:match("/download") or href_lower:match("[?&]fileid=") or href_lower:match("[?&]bookid=") then
+        return true, "download-url"
+    end
+
+    if type_lower == "" then
+        return true, "unknown-type"
+    end
+
+    return false, type_lower
+end
+
+function GrimmorySync:opdsAcquisitionLink(entry, title)
+    local fallback
+    local fallback_reason
+
+    for _, link in ipairs(self:opdsLinks(entry)) do
+        local ok_link, reason = self:isLikelyBookDownloadLink(link)
+        if ok_link then
+            if reason == "epub" then
+                return link
+            end
+            fallback = fallback or link
+            fallback_reason = fallback_reason or reason
+        elseif self:isOpdsAcquisitionLink(link) then
+            logger.info(
+                "[GrimmorySync] Ignoring non-EPUB acquisition link:",
+                title or "(untitled)",
+                "type:",
+                link.type or "",
+                "href:",
+                link.href or "",
+                "reason:",
+                reason or "unknown"
+            )
+        end
+    end
+
+    if fallback then
+        logger.warn(
+            "[GrimmorySync] Using acquisition link without EPUB MIME type:",
+            title or "(untitled)",
+            "type:",
+            fallback.type or "",
+            "href:",
+            fallback.href or "",
+            "reason:",
+            fallback_reason or "fallback"
+        )
+    end
+
+    return fallback
+end
+
+function GrimmorySync:bookIdFromOpds(entry, download_link)
+    local id_value = type(entry) == "string" and entry:match("<id>%s*(.-)%s*</id>") or nil
+    id_value = xmlText(id_value or "") or id_value
+
+    local candidates = {
+        id_value,
+        download_link,
+    }
+
+    local patterns = {
+        "urn:[^:]+:book:(%d+)",
+        "/api/v1/books/(%d+)/download",
+        "/api/v1/books/(%d+)",
+        "/books/(%d+)/download",
+        "/books/(%d+)",
+        "/opds/(%d+)/download",
+        "/opds/books/(%d+)",
+        "[?&]bookId=(%d+)",
+        "[?&]book_id=(%d+)",
+        "[?&]fileId=(%d+)",
+        "[?&]id=(%d+)",
+    }
+
+    for _, value in ipairs(candidates) do
+        value = tostring(value or "")
+        for _, pattern in ipairs(patterns) do
+            local matched = value:match(pattern)
+            if matched and matched ~= "" then
+                return matched
+            end
+        end
+    end
+
+    return nil
+end
+
+function GrimmorySync:fileNameFromOpdsLink(link)
+    if type(link) ~= "table" then
+        return nil
+    end
+
+    local title = trim(tostring(link.title or ""))
+    if title:lower():match("%.epub$") then
+        return title
+    end
+
+    local href = tostring(link.href or "")
+    local path = href:gsub("[?#].*$", "")
+    local filename = path:match("([^/]+%.epub)$")
+    if filename then
+        return urlDecode(filename)
+    end
+
+    return nil
+end
+
 function GrimmorySync:fetchShelves()
     -- Fetch the navigation feeds that contain acquisition sub-feeds we can sync.
     -- Aggregates personal shelves and magic (dynamic) shelves into one list.
@@ -1405,58 +1663,21 @@ function GrimmorySync:fetchBooklistFromGrimmory()
         
         -- Parse books from this page
         for entry in response:gmatch("<entry>(.-)</entry>") do
-            local title = entry:match("<title>(.-)</title>")
-            local author = entry:match("<author>.-<name>(.-)</name>.-</author>")
+            local title = xmlText(entry:match("<title[^>]*>(.-)</title>"))
+            local author = xmlText(entry:match("<author>.-<name[^>]*>(.-)</name>.-</author>"))
             -- Try alternative author formats if first pattern doesn't match
             if not author then
-                author = entry:match("<author>(.-)</author>")
+                author = xmlText(entry:match("<author[^>]*>(.-)</author>"))
             end
             if not author then
-                author = entry:match('<dc:creator>(.-)</dc:creator>')
-            end
-            -- Remove XML tags if author still contains them
-            if author then
-                author = author:gsub("<[^>]+>", "")
-                author = author:gsub("^%s+", ""):gsub("%s+$", "")
-                if author == "" then author = nil end
-            end
-            
-            -- Decode HTML entities in title and author
-            -- &amp; must be decoded FIRST to handle double-encoded entities (e.g. &amp;apos; -> &apos; -> ')
-            if title then
-                title = title:gsub("&amp;", "&")
-                title = title:gsub("&apos;", "'")
-                title = title:gsub("&#39;", "'")
-                title = title:gsub("&quot;", '"')
-                title = title:gsub("&lt;", "<")
-                title = title:gsub("&gt;", ">")
-            end
-            if author then
-                author = author:gsub("&amp;", "&")
-                author = author:gsub("&apos;", "'")
-                author = author:gsub("&#39;", "'")
-                author = author:gsub("&quot;", '"')
-                author = author:gsub("&lt;", "<")
-                author = author:gsub("&gt;", ">")
+                author = xmlText(entry:match('<dc:creator[^>]*>(.-)</dc:creator>'))
             end
 
-            local description = entry:match("<summary[^>]*>(.-)</summary>")
-                or entry:match("<content[^>]*>(.-)</content>")
-            if description then
-                description = description:gsub("<!%[CDATA%[(.-)%]%]>", "%1")
-                description = description:gsub("<[^>]+>", "")
-                description = description:gsub("&amp;", "&")
-                description = description:gsub("&apos;", "'")
-                description = description:gsub("&#39;", "'")
-                description = description:gsub("&quot;", '"')
-                description = description:gsub("&lt;", "<")
-                description = description:gsub("&gt;", ">")
-                description = description:gsub("%s+", " ")
-                description = description:gsub("^%s+", ""):gsub("%s+$", "")
-                if description == "" then description = nil end
-            end
+            local description = xmlText(entry:match("<summary[^>]*>(.-)</summary>")
+                or entry:match("<content[^>]*>(.-)</content>"))
 
-            local download_link
+            local acquisition_link = self:opdsAcquisitionLink(entry, title)
+            local download_link = acquisition_link and acquisition_link.href or nil
             
             -- Extract genres/tags (category elements)
             local genres = {}
@@ -1466,26 +1687,15 @@ function GrimmorySync:fetchBooklistFromGrimmory()
             
             -- Extract series and series index
             -- First try OPDS standard (belongs-to-collection)
-            local series = entry:match('<meta[^>]*property="belongs%-to%-collection"[^>]*id="series"[^>]*>([^<]+)</meta>')
-            local series_index = entry:match('<meta[^>]*property="group%-position"[^>]*refines="#series"[^>]*>([^<]+)</meta>')
+            local series = xmlText(entry:match('<meta[^>]*property="belongs%-to%-collection"[^>]*id="series"[^>]*>([^<]+)</meta>'))
+            local series_index = xmlText(entry:match('<meta[^>]*property="group%-position"[^>]*refines="#series"[^>]*>([^<]+)</meta>'))
             
             -- Fallback to Calibre compatibility format
             if not series then
-                series = entry:match('<meta[^>]*name="calibre:series"[^>]*content="([^"]+)"')
+                series = xmlDecode(entry:match('<meta[^>]*name="calibre:series"[^>]*content="([^"]+)"'))
             end
             if not series_index then
-                series_index = entry:match('<meta[^>]*name="calibre:series_index"[^>]*content="([^"]+)"')
-            end
-            
-            -- Decode HTML entities in series name
-            -- &amp; must be decoded FIRST to handle double-encoded entities (e.g. &amp;apos; -> &apos; -> ')
-            if series then
-                series = series:gsub("&amp;", "&")
-                series = series:gsub("&apos;", "'")
-                series = series:gsub("&#39;", "'")
-                series = series:gsub("&quot;", '"')
-                series = series:gsub("&lt;", "<")
-                series = series:gsub("&gt;", ">")
+                series_index = xmlDecode(entry:match('<meta[^>]*name="calibre:series_index"[^>]*content="([^"]+)"'))
             end
             
             -- Extract updated/published timestamp. Grimmory metadata rewrites
@@ -1499,41 +1709,12 @@ function GrimmorySync:fetchBooklistFromGrimmory()
                 year = metadata_timestamp:match("(%d%d%d%d)")
             end
             
-            -- Look for acquisition links (actual book downloads)
-            for link in entry:gmatch('<link([^>]*)>') do
-                local rel = link:match('rel="([^"]+)"')
-                local type_attr = link:match('type="([^"]+)"')
-                
-                -- Check for acquisition link with epub type
-                if rel and rel:match("acquisition") and type_attr and type_attr:match("epub") then
-                    download_link = link:match('href="([^"]+)"') or link:match("href='([^']+)'")
-                    if download_link then
-                        download_link = download_link:gsub("&amp;", "&")
-                        break
-                    end
-                end
-            end
-            
-            -- Also try self-closing links
-            if not download_link then
-                for link in entry:gmatch('<link([^>]*)/[>]?') do
-                    local rel = link:match('rel="([^"]+)"')
-                    local type_attr = link:match('type="([^"]+)"')
-                    
-                    if rel and rel:match("acquisition") and type_attr and type_attr:match("epub") then
-                        download_link = link:match('href="([^"]+)"') or link:match("href='([^']+)'")
-                        if download_link then
-                            download_link = download_link:gsub("&amp;", "&")
-                            break
-                        end
-                    end
-                end
-            end
-            
             if title and download_link then
-                local book_id = entry:match("<id>urn:booklore:book:(%d+)</id>")
-                    or download_link:match("/opds/(%d+)/download")
-                    or download_link:match("[?&]fileId=(%d+)")
+                local book_id = self:bookIdFromOpds(entry, download_link)
+                local opds_file_name = self:fileNameFromOpdsLink(acquisition_link)
+                if not book_id then
+                    logger.warn("[GrimmorySync] Book ID missing from OPDS entry:", title, "download:", download_link)
+                end
                 logger.info("[GrimmorySync] Found book:", title, "by", author or "Unknown", "series:", series or "none", "->", download_link)
                 table.insert(books, {
                     book_id = book_id,
@@ -1546,10 +1727,22 @@ function GrimmorySync:fetchBooklistFromGrimmory()
                     published = published,
                     description = description,
                     genres = genres,
+                    opds_file_name = opds_file_name,
                     download_url = download_link,
                 })
             elseif title then
-                logger.warn("[GrimmorySync] Book without download link:", title)
+                local acquisition_count = 0
+                for _, link in ipairs(self:opdsLinks(entry)) do
+                    if self:isOpdsAcquisitionLink(link) then
+                        acquisition_count = acquisition_count + 1
+                    end
+                end
+                logger.warn(
+                    "[GrimmorySync] Book without usable download link:",
+                    title,
+                    "acquisition_links:",
+                    acquisition_count
+                )
             end
         end
         
@@ -1966,7 +2159,7 @@ end
 
 function GrimmorySync:grimmorySourceFilename(book)
     book = book or {}
-    return self:fileNameBase(book.grimmory_file_name or book.source_file_name or book.file_name)
+    return self:fileNameBase(book.grimmory_file_name or book.opds_file_name or book.source_file_name or book.file_name)
 end
 
 function GrimmorySync:grimmorySourceRelativePath(book)
@@ -2440,6 +2633,51 @@ function GrimmorySync:normalizePathForCompare(path)
     return path:gsub("\\", "/"):gsub("/+", "/")
 end
 
+function GrimmorySync:isEpubPath(path)
+    if type(path) ~= "string" then
+        return false
+    end
+    return (path:match("%.([^%.]+)$") or ""):lower() == "epub"
+end
+
+function GrimmorySync:displayNameForPath(path)
+    if type(path) ~= "string" or path == "" then
+        return _("Unknown book")
+    end
+    return path:gsub("\\", "/"):match("([^/]+)$") or path
+end
+
+function GrimmorySync:relativeBookPath(path)
+    local normalized_path = self:normalizePathForCompare(path)
+    local normalized_root = self:normalizePathForCompare((self.local_path or ""):gsub("/+$", ""))
+    if normalized_root ~= "" and normalized_path:sub(1, #normalized_root + 1) == normalized_root .. "/" then
+        return normalized_path:sub(#normalized_root + 2)
+    end
+    return self:displayNameForPath(normalized_path)
+end
+
+function GrimmorySync:localBookFromPath(path)
+    if type(path) ~= "string" or path == "" then
+        return nil, _("No book file selected.")
+    end
+    if not self:isEpubPath(path) then
+        return nil, _("Only EPUB files can be refreshed from Grimmory.")
+    end
+
+    local ok_lfs, lfs = pcall(require, "libs/libkoreader-lfs")
+    if ok_lfs and lfs then
+        local attr = lfs.attributes(path)
+        if not attr or attr.mode ~= "file" then
+            return nil, _("Selected book file was not found.")
+        end
+    end
+
+    return {
+        path = path,
+        filename = self:relativeBookPath(path),
+    }, nil
+end
+
 function GrimmorySync:currentDocumentPath()
     if self.ui and self.ui.document and self.ui.document.file then
         return self.ui.document.file
@@ -2460,6 +2698,13 @@ function GrimmorySync:isCurrentDocumentPath(path)
         return false
     end
     return self:normalizePathForCompare(current_path) == self:normalizePathForCompare(path)
+end
+
+function GrimmorySync:refreshFileBrowserContent()
+    local ok_event, Event = pcall(require, "ui/event")
+    if ok_event and Event then
+        UIManager:broadcastEvent(Event:new("RefreshContent"))
+    end
 end
 
 function GrimmorySync:authorImagesPath()
@@ -2686,6 +2931,49 @@ function GrimmorySync:bookApiMetadata(book)
     return type(book.metadata) == "table" and book.metadata or book
 end
 
+function GrimmorySync:bookApiTitle(book)
+    local metadata = self:bookApiMetadata(book)
+    return self:metadataFieldValue(metadata.title or book.title)
+end
+
+function GrimmorySync:bookApiAuthor(book)
+    local metadata = self:bookApiMetadata(book)
+    local authors = metadata.authors or metadata.author or metadata.creator or book.authors or book.author
+    if type(authors) == "table" then
+        local parts = {}
+        for _, author in ipairs(authors) do
+            if type(author) == "table" then
+                local name = self:metadataFieldValue(author.name or author.fullName or author.sortName)
+                if name ~= "" then
+                    parts[#parts + 1] = name
+                end
+            else
+                local name = self:metadataFieldValue(author)
+                if name ~= "" then
+                    parts[#parts + 1] = name
+                end
+            end
+        end
+        return table.concat(parts, ", ")
+    end
+    return self:metadataFieldValue(authors)
+end
+
+function GrimmorySync:bookApiMatchKey(title, author)
+    title = self:normalizeForComparison(title or "")
+    author = self:normalizeForComparison(author or "")
+    if title == "" then return nil end
+    return title .. "|" .. author
+end
+
+function GrimmorySync:apiBookMatchKey(book)
+    return self:bookApiMatchKey(self:bookApiTitle(book), self:bookApiAuthor(book))
+end
+
+function GrimmorySync:remoteBookMatchKey(remote)
+    return self:bookApiMatchKey(remote and remote.title, remote and remote.author)
+end
+
 function GrimmorySync:metadataFieldValue(value)
     local value_type = type(value)
     if value == nil then
@@ -2730,16 +3018,47 @@ end
 
 function GrimmorySync:applyBookApiMetadata(remote_books, api_books)
     local by_id = {}
+    local by_match_key = {}
+    local by_title_key = {}
+    local title_counts = {}
+
     for _, book in ipairs(api_books or {}) do
         local id = self:bookApiId(book)
         if id ~= nil then
             by_id[tostring(id)] = book
         end
+
+        local match_key = self:apiBookMatchKey(book)
+        if match_key then
+            by_match_key[match_key] = by_match_key[match_key] or book
+        end
+
+        local title_key = self:normalizeForComparison(self:bookApiTitle(book))
+        if title_key ~= "" then
+            title_counts[title_key] = (title_counts[title_key] or 0) + 1
+            by_title_key[title_key] = book
+        end
     end
 
     local updated = 0
+    local matched_by_id = 0
+    local matched_by_key = 0
+    local matched_by_title = 0
     for _, remote in ipairs(remote_books or {}) do
         local api_book = remote.book_id and by_id[tostring(remote.book_id)]
+        local match_source = api_book and "id" or nil
+        if not api_book then
+            local match_key = self:remoteBookMatchKey(remote)
+            api_book = match_key and by_match_key[match_key] or nil
+            match_source = api_book and "title-author" or nil
+        end
+        if not api_book then
+            local title_key = self:normalizeForComparison(remote and remote.title or "")
+            if title_key ~= "" and title_counts[title_key] == 1 then
+                api_book = by_title_key[title_key]
+                match_source = api_book and "unique-title" or nil
+            end
+        end
         if api_book then
             local metadata = self:bookApiMetadata(api_book)
             local primary_file = type(api_book.primaryFile) == "table" and api_book.primaryFile or nil
@@ -2750,10 +3069,32 @@ function GrimmorySync:applyBookApiMetadata(remote_books, api_books)
                 remote.grimmory_file_sub_path = self:metadataFieldValue(primary_file.fileSubPath)
             end
             updated = updated + 1
+            if match_source == "id" then
+                matched_by_id = matched_by_id + 1
+            elseif match_source == "title-author" then
+                matched_by_key = matched_by_key + 1
+            elseif match_source == "unique-title" then
+                matched_by_title = matched_by_title + 1
+            end
         end
     end
 
-    logger.info("[GrimmorySync] Enriched", updated, "books with Grimmory API metadata")
+    logger.info(
+        "[GrimmorySync] Enriched",
+        updated,
+        "books with Grimmory API metadata",
+        "(id:",
+        matched_by_id,
+        "title-author:",
+        matched_by_key,
+        "unique-title:",
+        matched_by_title,
+        "remote:",
+        #(remote_books or {}),
+        "api:",
+        #(api_books or {}),
+        ")"
+    )
     return updated
 end
 
@@ -3131,12 +3472,11 @@ function GrimmorySync:metadataRefreshMessage(stats, result, image_ok, image_resu
     return message
 end
 
-function GrimmorySync:compareAndDownload(local_books, remote_books)
+function GrimmorySync:buildMissingBookQueue(local_books, remote_books)
     local local_index = self:buildLocalBookIndex(local_books)
     local manifest = self:loadManifest()
-    local manifest_changed = false
-
     local missing = {}
+
     for _, remote in ipairs(remote_books) do
         local matched_book, matched_name, fuzzy = self:findLocalMatch(remote, local_index)
 
@@ -3151,6 +3491,13 @@ function GrimmorySync:compareAndDownload(local_books, remote_books)
             table.insert(missing, remote)
         end
     end
+
+    return missing, manifest
+end
+
+function GrimmorySync:compareAndDownload(local_books, remote_books)
+    local missing, manifest = self:buildMissingBookQueue(local_books, remote_books)
+    local manifest_changed = false
     
     if #missing == 0 then
         return 0, nil
@@ -3186,6 +3533,77 @@ function GrimmorySync:compareAndDownload(local_books, remote_books)
     end
     
     return count, nil
+end
+
+function GrimmorySync:downloadMissingBooksAsync(missing, manifest, done_callback)
+    local total = #missing
+    local count = 0
+    local i = 0
+    manifest = manifest or self:loadManifest()
+
+    if total == 0 then
+        done_callback(true, { downloaded = 0, remaining = 0 })
+        return
+    end
+
+    local function finish(success, result)
+        self:saveManifest(manifest)
+        done_callback(success, result)
+    end
+
+    local function step()
+        if self.abort_sync then
+            logger.info("[GrimmorySync] Sync aborted by user")
+            finish(false, {
+                error = ABORTED,
+                downloaded = count,
+                remaining = total - count,
+            })
+            return
+        end
+
+        i = i + 1
+        if i > total then
+            finish(true, {
+                downloaded = count,
+                remaining = 0,
+            })
+            return
+        end
+
+        local book = missing[i]
+        self:showProgressDialog(string.format(
+            _("Downloading book %d of %d...\n\n%s\n\nDownloaded: %d\n\nTap Cancel to stop after the current file."),
+            i,
+            total,
+            book.title,
+            count
+        ))
+
+        if UIManager.forceRePaint then
+            pcall(function() UIManager:forceRePaint() end)
+        end
+
+        UIManager:scheduleIn(PROGRESS_STEP_DELAY_S, function()
+            if self.abort_sync then
+                UIManager:scheduleIn(0, step)
+                return
+            end
+
+            local downloaded, path = self:downloadBook(book)
+            if downloaded then
+                count = count + 1
+                if path then
+                    self:storeManifestEntry(manifest, path, book)
+                    self:saveManifest(manifest)
+                end
+            end
+
+            UIManager:scheduleIn(PROGRESS_STEP_DELAY_S, step)
+        end)
+    end
+
+    UIManager:scheduleIn(PROGRESS_STEP_DELAY_S, step)
 end
 
 function GrimmorySync:buildMetadataRefreshQueue(local_books, remote_books, options)
@@ -3794,6 +4212,12 @@ function GrimmorySync:onGrimmoryRefreshExistingMetadata()
     end)
 end
 
+function GrimmorySync:onGrimmoryRefreshOpenBookMetadata()
+    self:runAfterMenuClose(function()
+        self:startMetadataRefreshForOpenBook()
+    end)
+end
+
 function GrimmorySync:startSync()
     if self.server_url == "" then
         local config_dialog
@@ -3825,6 +4249,121 @@ function GrimmorySync:startSync()
             pcall(function() UIManager:close(confirm_dialog) end)
             UIManager:scheduleIn(0, function()
                 self:performSync()
+            end)
+        end,
+    }
+    UIManager:show(confirm_dialog)
+end
+
+function GrimmorySync:startMetadataRefreshForOpenBook()
+    local file_path = self:currentDocumentPath()
+    if not file_path then
+        UIManager:show(InfoMessage:new{
+            text = _("No book is currently open."),
+            timeout = 3,
+        })
+        return
+    end
+
+    self:startMetadataRefreshForFile(file_path, { offer_close_open_book = true })
+end
+
+function GrimmorySync:closeOpenBookAndRefresh(file_path)
+    if not (self.ui and self.ui.document and type(self.ui.onClose) == "function") then
+        UIManager:show(InfoMessage:new{
+            text = _("Close this book before refreshing its metadata."),
+            timeout = 4,
+        })
+        return
+    end
+
+    local close_message = InfoMessage:new{
+        text = _("Closing book..."),
+        timeout = 0,
+    }
+    UIManager:show(close_message)
+    if UIManager.forceRePaint then
+        UIManager:forceRePaint()
+    end
+
+    UIManager:nextTick(function()
+        self.ui:onClose(false)
+        if self.ui and type(self.ui.showFileManager) == "function" then
+            self.ui:showFileManager(file_path)
+        end
+        UIManager:close(close_message)
+        UIManager:scheduleIn(0.5, function()
+            self:performMetadataRefreshForFile(file_path)
+        end)
+    end)
+end
+
+function GrimmorySync:startMetadataRefreshForFile(file_path, options)
+    options = options or {}
+
+    if self.server_url == "" then
+        local config_dialog
+        config_dialog = ConfirmBox:new{
+            text = _("Server not configured!\n\nConfigure now?"),
+            ok_text = _("Configure"),
+            ok_callback = function()
+                pcall(function() UIManager:close(config_dialog) end)
+                UIManager:scheduleIn(0, function()
+                    self:showServerConfig()
+                end)
+            end,
+        }
+        UIManager:show(config_dialog)
+        return
+    end
+
+    local local_book, target_err = self:localBookFromPath(file_path)
+    if not local_book then
+        UIManager:show(InfoMessage:new{
+            text = target_err or _("This file cannot be refreshed."),
+            timeout = 4,
+        })
+        return
+    end
+
+    if self:isCurrentDocumentPath(file_path) then
+        if not options.offer_close_open_book then
+            UIManager:show(InfoMessage:new{
+                text = _("Close this book before refreshing its metadata."),
+                timeout = 4,
+            })
+            return
+        end
+
+        local close_dialog
+        close_dialog = ConfirmBox:new{
+            text = string.format(
+                _("Refresh metadata for the open book?\n\n%s\n\nKOReader must close the book before Grimmory Sync can replace the EPUB safely."),
+                self:displayNameForPath(file_path)
+            ),
+            ok_text = _("Close and refresh"),
+            cancel_text = _("Cancel"),
+            ok_callback = function()
+                pcall(function() UIManager:close(close_dialog) end)
+                self:closeOpenBookAndRefresh(file_path)
+            end,
+        }
+        UIManager:show(close_dialog)
+        return
+    end
+
+    local confirm_dialog
+    confirm_dialog = ConfirmBox:new{
+        text = string.format(
+            _("Refresh metadata for this book?\n\n%s\n\nOnly this local EPUB will be matched and replaced if Grimmory metadata has changed."),
+            self:displayNameForPath(file_path)
+        ),
+        ok_text = _("Refresh"),
+        cancel_text = _("Cancel"),
+        ok_callback = function()
+            pcall(function() UIManager:close(confirm_dialog) end)
+            UIManager:scheduleIn(0, function()
+                self:performMetadataRefreshForFile(file_path)
             end)
         end,
     }
@@ -3877,7 +4416,7 @@ function GrimmorySync:performSync()
     self.sync_running = true
     self:showProgressDialog(_("Scanning local books..."))
     
-    local ok, success, count_or_err = pcall(function()
+    local ok, success, payload = pcall(function()
         local local_books = self:scanLocalBooks()
         logger.info("[GrimmorySync] Local books found:", #local_books)
         
@@ -3915,13 +4454,18 @@ function GrimmorySync:performSync()
         end
         
         self:showProgressDialog(string.format(
-            _("Comparing and downloading...\n\nLocal: %d\nServer: %d\n\nTap Cancel to stop after the current file."),
+            _("Comparing local and server books...\n\nLocal: %d\nServer: %d\n\nTap Cancel to stop after the current step."),
             #local_books,
             #remote_books
         ))
         
-        local count, err = self:compareAndDownload(local_books, remote_books)
-        return true, {downloaded = count, local_count = #local_books, remote_count = #remote_books}
+        local missing, manifest = self:buildMissingBookQueue(local_books, remote_books)
+        return true, {
+            missing = missing,
+            manifest = manifest,
+            local_count = #local_books,
+            remote_count = #remote_books,
+        }
     end)
     
     self:closeProgressDialog()
@@ -3937,30 +4481,255 @@ function GrimmorySync:performSync()
     end
     
     if not success then
-        if count_or_err ~= ABORTED then
+        if payload ~= ABORTED then
             UIManager:show(InfoMessage:new{
-                text = string.format(_("Error: %s"), tostring(count_or_err)),
+                text = string.format(_("Error: %s"), tostring(payload)),
                 timeout = 5,
             })
-            logger.err("[GrimmorySync] Error:", count_or_err)
+            logger.err("[GrimmorySync] Error:", payload)
         end
         self.sync_running = false
         return
     end
     
-    local stats = count_or_err
-    local message = string.format(
-        _("Sync complete.\n\nLocal: %d books\nServer: %d books\nDownloaded missing: %d books"),
-        stats.local_count or 0,
-        stats.remote_count or 0,
-        stats.downloaded or 0
-    )
-    
-    UIManager:show(InfoMessage:new{
-        text = message,
-        timeout = 5,
-    })
-    self.sync_running = false
+    local stats = payload or {}
+    local missing = stats.missing or {}
+    if #missing == 0 then
+        UIManager:show(InfoMessage:new{
+            text = string.format(
+                _("Sync complete.\n\nLocal: %d books\nServer: %d books\nDownloaded missing: 0 books"),
+                stats.local_count or 0,
+                stats.remote_count or 0
+            ),
+            timeout = 5,
+        })
+        self.sync_running = false
+        return
+    end
+
+    self:downloadMissingBooksAsync(missing, stats.manifest, function(done_ok, result)
+        self:closeProgressDialog()
+        result = result or {}
+
+        if not done_ok then
+            if result.error == ABORTED then
+                UIManager:show(InfoMessage:new{
+                    text = string.format(
+                        _("Sync canceled.\n\nDownloaded: %d books\nRemaining: %d books"),
+                        result.downloaded or 0,
+                        result.remaining or 0
+                    ),
+                    timeout = 5,
+                })
+            else
+                UIManager:show(InfoMessage:new{
+                    text = string.format(_("Error: %s"), tostring(result.error or _("unknown"))),
+                    timeout = 5,
+                })
+                logger.err("[GrimmorySync] Error:", result.error)
+            end
+            self.sync_running = false
+            return
+        end
+
+        if (result.downloaded or 0) > 0 then
+            self:refreshFileBrowserContent()
+        end
+
+        UIManager:show(InfoMessage:new{
+            text = string.format(
+                _("Sync complete.\n\nLocal: %d books\nServer: %d books\nDownloaded missing: %d books"),
+                stats.local_count or 0,
+                stats.remote_count or 0,
+                result.downloaded or 0
+            ),
+            timeout = 5,
+        })
+        self.sync_running = false
+    end)
+end
+
+function GrimmorySync:performMetadataRefreshForFile(file_path)
+    if self.sync_running or self.auto_refresh_running then
+        UIManager:show(InfoMessage:new{
+            text = _("Grimmory Sync is already running."),
+            timeout = 3,
+        })
+        return
+    end
+
+    self.sync_running = true
+    self.abort_sync = false
+    self.abort_notified = false
+
+    local target_name = self:displayNameForPath(file_path)
+    self:showProgressDialog(string.format(
+        _("Preparing metadata refresh...\n\n%s"),
+        target_name
+    ))
+
+    local ok, success, payload = pcall(function()
+        if self:isCurrentDocumentPath(file_path) then
+            return false, _("Close this book before refreshing its metadata.")
+        end
+
+        local local_book, target_err = self:localBookFromPath(file_path)
+        if not local_book then
+            return false, target_err
+        end
+
+        if self.abort_sync then
+            return false, ABORTED
+        end
+
+        self:showProgressDialog(string.format(
+            _("Fetching books from server...\n\n%s\n\nTap Cancel to stop after the current step."),
+            target_name
+        ))
+
+        local remote_books, err = self:fetchBooklistFromGrimmory()
+        if not remote_books then
+            return false, err
+        end
+
+        if self.abort_sync then
+            return false, ABORTED
+        end
+
+        self:showProgressDialog(_("Fetching extra metadata from Grimmory..."))
+        local enriched, enrich_result = self:enrichRemoteBooksWithBookApiMetadata(remote_books)
+        if enriched then
+            logger.info("[GrimmorySync] Book API metadata applied:", enrich_result)
+        else
+            logger.warn("[GrimmorySync] Continuing without Book API metadata:", enrich_result)
+        end
+
+        if self.abort_sync then
+            return false, ABORTED
+        end
+
+        self:showProgressDialog(string.format(
+            _("Matching selected book...\n\n%s"),
+            target_name
+        ))
+
+        local matched, skipped, manifest, queue_stats = self:buildMetadataRefreshQueue({ local_book }, remote_books, {
+            skip_open_book = true,
+        })
+
+        return true, {
+            matched = matched,
+            manifest = manifest,
+            queue_stats = queue_stats,
+            skipped = skipped or 0,
+            remote_count = #remote_books,
+            target_name = target_name,
+        }
+    end)
+
+    self:closeProgressDialog()
+
+    if not ok then
+        UIManager:show(InfoMessage:new{
+            text = string.format(_("Metadata refresh error: %s"), tostring(success)),
+            timeout = 5,
+        })
+        logger.err("[GrimmorySync] Metadata refresh error:", success)
+        self.sync_running = false
+        return
+    end
+
+    if not success then
+        if payload ~= ABORTED then
+            UIManager:show(InfoMessage:new{
+                text = string.format(_("Error: %s"), tostring(payload)),
+                timeout = 5,
+            })
+            logger.err("[GrimmorySync] Metadata refresh error:", payload)
+        end
+        self.sync_running = false
+        return
+    end
+
+    local stats = payload or {}
+    local matched = stats.matched or {}
+    if #matched == 0 then
+        local queue_stats = stats.queue_stats or {}
+        local message
+        if (queue_stats.skipped_open or 0) > 0 then
+            message = string.format(
+                _("Metadata refresh skipped.\n\n%s\n\nClose the book and try again."),
+                stats.target_name or target_name
+            )
+        elseif (stats.skipped or 0) > 0 then
+            message = string.format(
+                _("Metadata is already up to date.\n\n%s"),
+                stats.target_name or target_name
+            )
+        else
+            local sync_source = (self.selected_feed and self.selected_feed ~= "")
+                and (self.selected_feed_label ~= "" and self.selected_feed_label or self.selected_feed)
+                or _("All books")
+            message = string.format(
+                _("No matching Grimmory book was found for this EPUB in the selected sync source.\n\nFile: %s\nSource: %s"),
+                stats.target_name or target_name,
+                sync_source
+            )
+        end
+
+        UIManager:show(InfoMessage:new{
+            text = message,
+            timeout = 5,
+        })
+        self.sync_running = false
+        return
+    end
+
+    self:refreshExistingMetadataAsync(matched, stats.skipped or 0, stats.manifest, function(done_ok, result)
+        self:closeProgressDialog()
+        result = result or {}
+
+        if not done_ok then
+            if result.error == ABORTED then
+                UIManager:show(InfoMessage:new{
+                    text = string.format(
+                        _("Metadata refresh canceled.\n\nUpdated: %d books"),
+                        result.refreshed or 0
+                    ),
+                    timeout = 5,
+                })
+            else
+                UIManager:show(InfoMessage:new{
+                    text = string.format(_("Error: %s"), tostring(result.error or _("unknown"))),
+                    timeout = 5,
+                })
+                logger.err("[GrimmorySync] Metadata refresh error:", result.error)
+            end
+            self.sync_running = false
+            return
+        end
+
+        if (result.refreshed or 0) > 0 then
+            self:refreshFileBrowserContent()
+            UIManager:show(InfoMessage:new{
+                text = string.format(
+                    _("Metadata refreshed.\n\n%s"),
+                    stats.target_name or target_name
+                ),
+                timeout = 5,
+            })
+        else
+            UIManager:show(InfoMessage:new{
+                text = string.format(
+                    _("No file was replaced.\n\n%s"),
+                    stats.target_name or target_name
+                ),
+                timeout = 5,
+            })
+        end
+
+        self.sync_running = false
+    end, { skip_open_book = true })
 end
 
 function GrimmorySync:performMetadataRefresh()

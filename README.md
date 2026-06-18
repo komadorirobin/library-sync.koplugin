@@ -111,12 +111,27 @@ This replaces matched local EPUB files with freshly downloaded copies from Grimm
 
 The currently open book is skipped during metadata refresh so KOReader is not reading from a file while Grimmory Sync replaces it. Close the book or open another book, then run refresh again if the skipped book also needs an update.
 
+To refresh only one EPUB, long-press it in KOReader's file browser and choose:
+
+```text
+Refresh Grimmory metadata
+```
+
+When a book is open, use:
+
+```text
+Menu -> Magnifying glass -> Grimmory Sync -> Refresh open book metadata
+```
+
+KOReader must close the open book before its EPUB can be replaced safely. Grimmory Sync asks for confirmation, closes the book, returns to the file browser, and refreshes only that file.
+
 ### SimpleUI Quick Actions
 
 SimpleUI users can add Grimmory Sync shortcuts from SimpleUI's `System Actions` picker:
 
 - `Grimmory Sync: Sync missing books`
 - `Grimmory Sync: Refresh existing metadata`
+- `Grimmory Sync: Refresh open book metadata`
 
 The older SimpleUI `Plugin` shortcut entry still opens `Sync missing books` for backwards compatibility.
 
@@ -167,8 +182,11 @@ Books are placed according to the selected download folder profile and named acc
 ## Notes
 
 - The current download implementation prefers EPUB acquisition links.
+- OPDS acquisition links without an EPUB MIME type are accepted when they still look like Grimmory book download links; skipped OPDS entries are logged with their title and link details.
 - Local matching is filename-based and intentionally fuzzy around common punctuation and accents.
+- Large missing-book syncs yield between downloads so KOReader's UI can update during long library migrations.
 - Metadata refresh uses `grimmory_sync_manifest.lua` and compares stable metadata such as title, author, series, tags, description, and Hardcover IDs when available from Grimmory's authenticated book API. If enabled, the OPDS timestamp trigger also compares each book entry's `<updated>` value.
+- `Grimmory file name` uses the authenticated Book API filename when available, with OPDS filename data as a fallback.
 - Bookshelf author image sync uses Grimmory's authenticated `/api/v1/authors` and `/api/v1/media/author/{id}/photo` endpoints, and writes exact/slugged Bookshelf-compatible filenames.
 - The plugin UI uses English source strings wrapped with KOReader's gettext helper, so translations can be added without changing the Lua code.
 - OTA updates require a release asset named `grimmory-sync.koplugin.zip`.
