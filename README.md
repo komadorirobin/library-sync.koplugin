@@ -66,14 +66,19 @@ Then configure:
 1. `Library server`: Grimmory or BookOrbit.
 2. `Server URL`: the server origin, for example `http://192.168.1.100:6060`. The full `/api/v1/opds` URL shown by BookOrbit is also accepted.
 3. OPDS username and password.
-4. Optional BookOrbit account credentials for extra metadata and author images.
+4. Optional server account credentials for extra metadata and author images.
 5. The local book path where KOReader may read and write files.
 
-Existing installations are automatically treated as Grimmory installations. Their server URL, credentials, local path, routing profile, file naming, selected shelf, manifest, and history remain valid.
+Existing installations are automatically treated as Grimmory installations. Their server URL, credentials, local path, routing profile, file naming, selected shelf, manifest, and history remain valid. When upgrading from older releases, existing Grimmory OPDS credentials are copied into the new API credential fields once so installations that used one shared login continue to work.
 
 ### Grimmory Credentials
 
-Use the credentials accepted by the Grimmory OPDS and API endpoints. The same credentials are used for catalogue access, extra metadata, original filenames, and author images.
+Grimmory can use separate credentials for OPDS and its normal API:
+
+- `Grimmory KOReader Sync username/password`: configure these under Grimmory's user settings. They are used for OPDS catalogue browsing and book downloads.
+- `Grimmory account username/password`: optional normal Grimmory account credentials. They enable API metadata such as series, genres, tags, Hardcover IDs, original filenames, and Bookshelf author images.
+
+If your Grimmory OPDS and account credentials are the same, enter the same values in both places. If Grimmory is exposed through a reverse proxy or tunnel that enforces HTTPS, use the public `https://` server URL in Library Sync.
 
 ### BookOrbit Credentials
 
@@ -98,7 +103,7 @@ Credentials are stored as plain text in KOReader's platform-specific `settings/`
 
 New installations default to `Library root`. Existing installations without a saved profile retain the earlier Swedish example behavior to avoid moving an established library layout.
 
-Custom rules may match `genre`/`genres`, `tag`/`tags`, `author`/`authors`, or use a custom `when(book, helpers)` function. BookOrbit genres and tags require the optional BookOrbit API credentials. See [examples/path_rules.lua](examples/path_rules.lua).
+Custom rules may match `genre`/`genres`, `tag`/`tags`, `author`/`authors`, or use a custom `when(book, helpers)` function. Server API genres and tags require the optional account credentials. See [examples/path_rules.lua](examples/path_rules.lua).
 
 ## Download File Naming
 
@@ -185,7 +190,7 @@ Enable it under:
 Library Sync -> Bookshelf integration -> Sync Bookshelf author images during metadata refresh
 ```
 
-Existing images are skipped. Grimmory uses its author media API. BookOrbit uses its paginated authors API and full author-image endpoint, which require the optional normal BookOrbit account credentials.
+Existing images are skipped. Grimmory uses its author media API, and BookOrbit uses its paginated authors API and full author-image endpoint. These API-backed image features require the optional normal server account credentials.
 
 ## OTA Updates
 

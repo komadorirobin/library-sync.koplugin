@@ -3,7 +3,7 @@ return {
     name = "Grimmory",
     opds_root = "/api/v1/opds",
     api_login = "/api/v1/auth/login",
-    api_credentials_separate = false,
+    api_credentials_separate = true,
     book_api = {
         method = "GET",
         endpoint = "/api/v1/books?stripForListView=false",

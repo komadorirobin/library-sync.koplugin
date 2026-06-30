@@ -18,13 +18,108 @@ local decoded_json = {}
 package.preload["json"] = function()
     return { decode = function(body) return decoded_json[body] end }
 end
+local http_requests = {}
+package.preload["ltn12"] = function()
+    return {
+        sink = {
+            table = function(target)
+                return function(chunk)
+                    if chunk then
+                        target[#target + 1] = chunk
+                    end
+                    return 1
+                end
+            end,
+        },
+        source = {
+            string = function(value)
+                local done = false
+                return function()
+                    if done then
+                        return nil
+                    end
+                    done = true
+                    return value
+                end
+            end,
+        },
+    }
+end
+package.preload["socket.http"] = function()
+    return {
+        request = function(request)
+            local body = request.source and request.source() or nil
+            http_requests[#http_requests + 1] = {
+                url = request.url,
+                method = request.method,
+                body = body,
+            }
+            if request.url == "http://redirect.example.com/api/v1/auth/login" then
+                return 1, 301, { location = "https://redirect.example.com/api/v1/auth/login" }
+            end
+            return nil, "unexpected HTTP URL: " .. tostring(request.url)
+        end,
+    }
+end
+package.preload["ssl.https"] = function()
+    return {
+        request = function(request)
+            local body = request.source and request.source() or nil
+            http_requests[#http_requests + 1] = {
+                url = request.url,
+                method = request.method,
+                body = body,
+            }
+            if request.url == "https://redirect.example.com/api/v1/auth/login" then
+                request.sink("redirected-ok")
+                return 1, 200, {}
+            end
+            return nil, "unexpected HTTPS URL: " .. tostring(request.url)
+        end,
+    }
+end
 
 local Providers = require("providers/init")
 local plugin = dofile("main.lua")
 
 assert(Providers.get("grimmory").opds_root == "/api/v1/opds")
+assert(Providers.get("grimmory").api_credentials_separate == true)
 assert(Providers.get("bookorbit").book_api.endpoint == "/api/v1/books/query")
 assert(Providers.get("bookorbit").api_credentials_separate == true)
+
+local redirected, redirect_err = plugin:httpRequest("http://redirect.example.com/api/v1/auth/login", {
+    method = "POST",
+    body = '{"username":"account-user","password":"account-password"}',
+    headers = {
+        ["content-type"] = "application/json",
+    },
+})
+assert(redirected == "redirected-ok", tostring(redirect_err))
+assert(#http_requests == 2)
+assert(http_requests[1].method == "POST")
+assert(http_requests[2].method == "POST")
+assert(http_requests[2].body:match("account%-user"))
+
+plugin.server_type = "grimmory"
+plugin.server_url = "https://grimmory.example.com"
+plugin.username = "opds-user"
+plugin.password = "opds-password"
+plugin.api_username = "account-user"
+plugin.api_password = "account-password"
+local captured_login_body
+decoded_json["api-login-ok"] = { accessToken = "token" }
+plugin.httpRequest = function(_, url, options)
+    captured_login_body = options.body
+    return "api-login-ok", nil
+end
+local token, login_err = plugin:loginToServerApi()
+assert(token == "token", tostring(login_err))
+assert(captured_login_body:match('"username":"account%-user"'))
+assert(captured_login_body:match('"password":"account%-password"'))
+assert(plugin:apiMetadataWarning("HTTP 400"):match("HTTP 400"))
+plugin.api_username = ""
+plugin.api_password = ""
+assert(plugin:apiMetadataWarning("HTTP 400") == "")
 
 plugin.server_type = "bookorbit"
 plugin.server_url = "https://books.example.com"

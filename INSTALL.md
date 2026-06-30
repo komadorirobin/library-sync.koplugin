@@ -32,6 +32,8 @@ Menu -> Magnifying glass -> Library Sync -> Configure
 
 Choose Grimmory or BookOrbit, enter the server origin URL or full `/api/v1/opds` URL and the OPDS credentials, then choose a writable local book directory.
 
+For Grimmory, use the KOReader Sync credentials for OPDS. The optional normal Grimmory account credentials enable extra series metadata, genres, tags, Hardcover identifiers, original filenames, and Bookshelf author images.
+
 For BookOrbit, create dedicated OPDS credentials under BookOrbit's OPDS settings. The optional normal BookOrbit account credentials enable extra genres, tags, Hardcover identifiers, and Bookshelf author images.
 
 ## 4. Run the first sync
@@ -50,8 +52,9 @@ Start with a restricted shelf, collection, or SmartScope if you want to verify t
 | --- | --- |
 | Plugin is missing | Confirm the `.koplugin` directory name, file nesting, and restart KOReader. |
 | Connection fails | Confirm the device can reach the server origin over the network. |
-| OPDS returns 401 | Use OPDS credentials, not BookOrbit's normal login credentials. |
-| BookOrbit extra metadata is absent | Configure the optional normal BookOrbit account credentials. |
+| OPDS returns 401 | Use OPDS credentials, not normal server account credentials. |
+| Extra metadata is absent | Configure the optional normal server account credentials. |
+| Extra metadata fails behind a proxy or tunnel | Use the public `https://` server URL. |
 | No books are downloaded | Confirm the selected sync source contains EPUB files and the local path is writable. |
 | Author images fail | Enable Bookshelf integration and verify API credentials. |
 

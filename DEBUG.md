@@ -56,9 +56,10 @@ Confirm that:
 - The server URL is the origin, such as `https://books.example.com`, not a browser-only local address.
 - The KOReader device can reach that address.
 - Reverse proxies allow `/api/v1/opds` and book download requests.
-- The configured username and password are OPDS credentials.
+- The configured OPDS username and password are OPDS credentials.
+- The optional account username and password are normal server account credentials.
 
-BookOrbit's normal account credentials do not authenticate its OPDS catalogue. Configure them separately only for optional API metadata and author images.
+Normal Grimmory or BookOrbit account credentials may not authenticate the OPDS catalogue. Configure them separately only for optional API metadata and author images. If extra metadata fails behind a reverse proxy or tunnel, configure Library Sync with the public `https://` server URL.
 
 ## Useful issue details
 

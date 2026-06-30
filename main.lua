@@ -260,6 +260,48 @@ local function urlEncode(value)
     end)
 end
 
+local function responseHeader(headers, name)
+    if type(headers) ~= "table" then
+        return nil
+    end
+    local wanted = tostring(name or ""):lower()
+    for key, value in pairs(headers) do
+        if tostring(key):lower() == wanted then
+            return value
+        end
+    end
+    return nil
+end
+
+local function resolveRedirectUrl(current_url, location)
+    if type(location) ~= "string" or location == "" then
+        return nil
+    end
+    location = trim(location)
+    if location:match("^https?://") then
+        return location
+    end
+
+    local scheme, host, path = current_url:match("^(https?)://([^/]+)(/.*)$")
+    if not scheme then
+        scheme, host = current_url:match("^(https?)://([^/]+)$")
+        path = "/"
+    end
+    if not scheme or not host then
+        return nil
+    end
+
+    if location:sub(1, 2) == "//" then
+        return scheme .. ":" .. location
+    end
+    if location:sub(1, 1) == "/" then
+        return scheme .. "://" .. host .. location
+    end
+
+    local base_path = path:gsub("[^/]*$", "")
+    return scheme .. "://" .. host .. base_path .. location
+end
+
 local function decodeJsonString(value)
     if not value then return nil end
     value = value:gsub("\\u(%x%x%x%x)", function(hex)
@@ -389,6 +431,7 @@ function GrimmorySync:loadSettings()
             password = "",
             api_username = "",
             api_password = "",
+            api_credentials_migrated = true,
             local_path = DEFAULT_LOCAL_PATH,
             sync_author_images = false,
             routing_profile = ROUTING_PROFILE_FLAT,
@@ -436,14 +479,32 @@ function GrimmorySync:loadSettings()
         -- Settings written before multi-server support always belong to Grimmory.
         server_type = SERVER_GRIMMORY
     end
+
+    local api_username = settings.api_username or ""
+    local api_password = settings.api_password or ""
+    local api_credentials_migrated = settingToBool(settings.api_credentials_migrated, false)
+    if server_type == SERVER_GRIMMORY
+        and not api_credentials_migrated
+        and api_username == ""
+        and api_password == ""
+        and (settings.username or "") ~= ""
+        and (settings.password or "") ~= "" then
+        -- Older Grimmory-only settings used the OPDS credentials for both
+        -- catalogue access and API enrichment. Keep that behavior until the
+        -- user explicitly configures separate Grimmory account credentials.
+        api_username = settings.username or ""
+        api_password = settings.password or ""
+        settings_needs_migration = true
+    end
     
     return {
         server_type = server_type,
         server_url = settings.server_url or "",
         username = settings.username or "",
         password = settings.password or "",
-        api_username = settings.api_username or "",
-        api_password = settings.api_password or "",
+        api_username = api_username,
+        api_password = api_password,
+        api_credentials_migrated = true,
         local_path = settings.local_path or DEFAULT_LOCAL_PATH,
         sync_author_images = settingToBool(settings.sync_author_images, true),
         routing_profile = routing_profile,
@@ -473,6 +534,7 @@ function GrimmorySync:saveSettings()
     file:write("password=" .. self.password .. "\n")
     file:write("api_username=" .. (self.api_username or "") .. "\n")
     file:write("api_password=" .. (self.api_password or "") .. "\n")
+    file:write("api_credentials_migrated=true\n")
     file:write("local_path=" .. self.local_path .. "\n")
     file:write("sync_author_images=" .. boolToSetting(self.sync_author_images ~= false) .. "\n")
     file:write("routing_profile=" .. (self.routing_profile or ROUTING_PROFILE_FLAT) .. "\n")
@@ -971,7 +1033,10 @@ function GrimmorySync:getBookshelfIntegrationMenu()
                 if self.sync_author_images and self:provider().api_credentials_separate then
                     local api_username, api_password = self:apiCredentials()
                     if api_username == "" or api_password == "" then
-                        message = _("Bookshelf author image sync enabled. BookOrbit account credentials are required under Configure.")
+                        message = string.format(
+                            _("Bookshelf author image sync enabled. %s account credentials are required under Configure."),
+                            self:serverName()
+                        )
                     end
                 end
                 UIManager:show(InfoMessage:new{
@@ -1199,9 +1264,11 @@ function GrimmorySync:showServerConfig()
 end
 
 function GrimmorySync:showUsernameConfig()
-    local title = _("Username (optional)")
-    if self.server_type == SERVER_BOOKORBIT then
-        title = _("OPDS username")
+    local title = string.format(_("%s OPDS username (optional)"), self:serverName())
+    if self.server_type == SERVER_GRIMMORY then
+        title = _("Grimmory KOReader Sync username (optional)")
+    elseif self.server_type == SERVER_BOOKORBIT then
+        title = _("BookOrbit OPDS username (optional)")
     end
     local input_dialog
     input_dialog = InputDialog:new{
@@ -1233,9 +1300,11 @@ function GrimmorySync:showUsernameConfig()
 end
 
 function GrimmorySync:showPasswordConfig()
-    local title = _("Password (optional)")
-    if self.server_type == SERVER_BOOKORBIT then
-        title = _("OPDS password")
+    local title = string.format(_("%s OPDS password (optional)"), self:serverName())
+    if self.server_type == SERVER_GRIMMORY then
+        title = _("Grimmory KOReader Sync password (optional)")
+    elseif self.server_type == SERVER_BOOKORBIT then
+        title = _("BookOrbit OPDS password (optional)")
     end
     local input_dialog
     input_dialog = InputDialog:new{
@@ -1272,12 +1341,20 @@ function GrimmorySync:showPasswordConfig()
 end
 
 function GrimmorySync:showApiUsernameConfig()
+    local title = string.format(_("%s account username (optional)"), self:serverName())
+    local description = _("Used only for extra metadata and Bookshelf author images. OPDS syncing works without it.")
+    if self.server_type == SERVER_GRIMMORY then
+        title = _("Grimmory account username (optional)")
+        description = _("Use your normal Grimmory account credentials for extra metadata and Bookshelf author images. OPDS syncing uses the separate KOReader Sync credentials.")
+    elseif self.server_type == SERVER_BOOKORBIT then
+        title = _("BookOrbit account username (optional)")
+    end
     local input_dialog
     input_dialog = InputDialog:new{
-        title = _("BookOrbit account username (optional)"),
+        title = title,
         input = self.api_username or "",
         input_type = "text",
-        description = _("Used only for extra metadata and Bookshelf author images. OPDS syncing works without it."),
+        description = description,
         buttons = {
             {
                 {
@@ -1303,9 +1380,15 @@ function GrimmorySync:showApiUsernameConfig()
 end
 
 function GrimmorySync:showApiPasswordConfig()
+    local title = string.format(_("%s account password (optional)"), self:serverName())
+    if self.server_type == SERVER_GRIMMORY then
+        title = _("Grimmory account password (optional)")
+    elseif self.server_type == SERVER_BOOKORBIT then
+        title = _("BookOrbit account password (optional)")
+    end
     local input_dialog
     input_dialog = InputDialog:new{
-        title = _("BookOrbit account password (optional)"),
+        title = title,
         input = self.api_password or "",
         input_type = "text",
         text_type = "password",
@@ -1524,46 +1607,82 @@ function GrimmorySync:httpRequest(url, options)
         return nil, _("Cannot load HTTP libraries")
     end
 
-    local headers = {}
-    for key, value in pairs(options.headers or {}) do
-        headers[key] = value
+    local current_url = url
+    local method = options.method or "GET"
+    local body_text = options.body
+    local redirects = 0
+    local max_redirects = options.max_redirects or 5
+    local can_follow_redirects = options.follow_redirects ~= false and not options.sink
+
+    while true do
+        local headers = {}
+        for key, value in pairs(options.headers or {}) do
+            headers[key] = value
+        end
+
+        local response_body
+        local sink = options.sink
+        if not sink then
+            response_body = {}
+            sink = ltn12.sink.table(response_body)
+        end
+
+        local request = {
+            url = current_url,
+            method = method,
+            headers = headers,
+            sink = sink,
+        }
+
+        if body_text then
+            headers["content-length"] = tostring(#body_text)
+            request.source = ltn12.source.string(body_text)
+        end
+
+        local request_func = current_url:match("^https://")
+            and (ok_https and https.request or http.request)
+            or http.request
+
+        local success, status_code, response_headers = request_func(request)
+        local status_num = tonumber(status_code)
+        local body = response_body and table.concat(response_body) or true
+
+        if not success then
+            return body, string.format(_("Connection failed: %s"), tostring(status_code)), status_code, response_headers
+        end
+
+        if status_num and status_num >= 300 and status_num < 400 and can_follow_redirects then
+            local location = responseHeader(response_headers, "location")
+            local redirect_url = resolveRedirectUrl(current_url, location)
+            if redirect_url then
+                redirects = redirects + 1
+                if redirects > max_redirects then
+                    return body, _("Too many HTTP redirects"), status_code, response_headers
+                end
+                logger.info("[GrimmorySync] Following HTTP redirect:", tostring(status_code), current_url, "->", redirect_url)
+                current_url = redirect_url
+                if status_num == 303 then
+                    method = "GET"
+                    body_text = nil
+                end
+            else
+                local message = string.format(_("HTTP %s"), tostring(status_code))
+                if location and location ~= "" then
+                    message = string.format(_("HTTP %s redirect to %s"), tostring(status_code), tostring(location))
+                end
+                return body, message, status_code, response_headers
+            end
+        elseif status_num and (status_num < 200 or status_num >= 300) then
+            local message = string.format(_("HTTP %s"), tostring(status_code))
+            local location = responseHeader(response_headers, "location")
+            if status_num >= 300 and status_num < 400 and location and location ~= "" then
+                message = string.format(_("HTTP %s redirect to %s"), tostring(status_code), tostring(location))
+            end
+            return body, message, status_code, response_headers
+        else
+            return body, nil, status_code, response_headers
+        end
     end
-
-    local request = {
-        url = url,
-        method = options.method or "GET",
-        headers = headers,
-        sink = options.sink,
-    }
-
-    local response_body
-    if not request.sink then
-        response_body = {}
-        request.sink = ltn12.sink.table(response_body)
-    end
-
-    if options.body then
-        headers["content-length"] = tostring(#options.body)
-        request.source = ltn12.source.string(options.body)
-    end
-
-    local request_func = url:match("^https://")
-        and (ok_https and https.request or http.request)
-        or http.request
-
-    local success, status_code, response_headers = request_func(request)
-    local status_num = tonumber(status_code)
-    local body = response_body and table.concat(response_body) or true
-
-    if not success then
-        return body, string.format(_("Connection failed: %s"), tostring(status_code)), status_code, response_headers
-    end
-
-    if status_num and (status_num < 200 or status_num >= 300) then
-        return body, string.format(_("HTTP %s"), tostring(status_code)), status_code, response_headers
-    end
-
-    return body, nil, status_code, response_headers
 end
 
 function GrimmorySync:makeRequest(endpoint)
@@ -3854,6 +3973,17 @@ function GrimmorySync:syncAuthorImagesAsync(done_callback)
     UIManager:scheduleIn(PROGRESS_STEP_DELAY_S, step)
 end
 
+function GrimmorySync:apiMetadataWarning(error)
+    if error == nil or tostring(error) == "" then
+        return ""
+    end
+    local api_username, api_password = self:apiCredentials()
+    if api_username == "" and api_password == "" then
+        return ""
+    end
+    return "\n\n" .. string.format(_("Extra server metadata skipped: %s"), tostring(error))
+end
+
 function GrimmorySync:metadataRefreshMessage(stats, result, image_ok, image_result)
     result = result or {}
 
@@ -3879,6 +4009,8 @@ function GrimmorySync:metadataRefreshMessage(stats, result, image_ok, image_resu
             result.skipped_open or 0
         )
     end
+
+    message = message .. self:apiMetadataWarning(stats.api_error)
 
     if image_result and image_result.enabled then
         if image_ok then
@@ -4846,10 +4978,12 @@ function GrimmorySync:performSync()
 
         self:showProgressDialog(string.format(_("Fetching extra metadata from %s..."), self:serverName()))
         local enriched, enrich_result = self:enrichRemoteBooksWithBookApiMetadata(remote_books)
+        local api_error
         if enriched then
             logger.info("[GrimmorySync] Book API metadata applied:", enrich_result)
         else
             logger.warn("[GrimmorySync] Continuing without Book API metadata:", enrich_result)
+            api_error = enrich_result
         end
 
         if self.abort_sync then
@@ -4868,6 +5002,7 @@ function GrimmorySync:performSync()
             manifest = manifest,
             local_count = #local_books,
             remote_count = #remote_books,
+            api_error = api_error,
         }
     end)
     
@@ -4898,12 +5033,13 @@ function GrimmorySync:performSync()
     local stats = payload or {}
     local missing = stats.missing or {}
     if #missing == 0 then
+        local message = string.format(
+            _("Sync complete.\n\nLocal: %d books\nServer: %d books\nDownloaded missing: 0 books"),
+            stats.local_count or 0,
+            stats.remote_count or 0
+        ) .. self:apiMetadataWarning(stats.api_error)
         UIManager:show(InfoMessage:new{
-            text = string.format(
-                _("Sync complete.\n\nLocal: %d books\nServer: %d books\nDownloaded missing: 0 books"),
-                stats.local_count or 0,
-                stats.remote_count or 0
-            ),
+            text = message,
             timeout = 5,
         })
         self.sync_running = false
@@ -4939,13 +5075,14 @@ function GrimmorySync:performSync()
             self:refreshFileBrowserContent()
         end
 
+        local message = string.format(
+            _("Sync complete.\n\nLocal: %d books\nServer: %d books\nDownloaded missing: %d books"),
+            stats.local_count or 0,
+            stats.remote_count or 0,
+            result.downloaded or 0
+        ) .. self:apiMetadataWarning(stats.api_error)
         UIManager:show(InfoMessage:new{
-            text = string.format(
-                _("Sync complete.\n\nLocal: %d books\nServer: %d books\nDownloaded missing: %d books"),
-                stats.local_count or 0,
-                stats.remote_count or 0,
-                result.downloaded or 0
-            ),
+            text = message,
             timeout = 5,
         })
         self.sync_running = false
@@ -5001,10 +5138,12 @@ function GrimmorySync:performMetadataRefreshForFile(file_path)
 
         self:showProgressDialog(string.format(_("Fetching extra metadata from %s..."), self:serverName()))
         local enriched, enrich_result = self:enrichRemoteBooksWithBookApiMetadata(remote_books)
+        local api_error
         if enriched then
             logger.info("[GrimmorySync] Book API metadata applied:", enrich_result)
         else
             logger.warn("[GrimmorySync] Continuing without Book API metadata:", enrich_result)
+            api_error = enrich_result
         end
 
         if self.abort_sync then
@@ -5027,6 +5166,7 @@ function GrimmorySync:performMetadataRefreshForFile(file_path)
             skipped = skipped or 0,
             remote_count = #remote_books,
             target_name = target_name,
+            api_error = api_error,
         }
     end)
 
@@ -5081,7 +5221,7 @@ function GrimmorySync:performMetadataRefreshForFile(file_path)
         end
 
         UIManager:show(InfoMessage:new{
-            text = message,
+            text = message .. self:apiMetadataWarning(stats.api_error),
             timeout = 5,
         })
         self.sync_running = false
@@ -5114,19 +5254,21 @@ function GrimmorySync:performMetadataRefreshForFile(file_path)
 
         if (result.refreshed or 0) > 0 then
             self:refreshFileBrowserContent()
+            local message = string.format(
+                _("Metadata refreshed.\n\n%s"),
+                stats.target_name or target_name
+            ) .. self:apiMetadataWarning(stats.api_error)
             UIManager:show(InfoMessage:new{
-                text = string.format(
-                    _("Metadata refreshed.\n\n%s"),
-                    stats.target_name or target_name
-                ),
+                text = message,
                 timeout = 5,
             })
         else
+            local message = string.format(
+                _("No file was replaced.\n\n%s"),
+                stats.target_name or target_name
+            ) .. self:apiMetadataWarning(stats.api_error)
             UIManager:show(InfoMessage:new{
-                text = string.format(
-                    _("No file was replaced.\n\n%s"),
-                    stats.target_name or target_name
-                ),
+                text = message,
                 timeout = 5,
             })
         end
@@ -5173,10 +5315,12 @@ function GrimmorySync:performMetadataRefresh()
 
         self:showProgressDialog(string.format(_("Fetching extra metadata from %s..."), self:serverName()))
         local enriched, enrich_result = self:enrichRemoteBooksWithBookApiMetadata(remote_books)
+        local api_error
         if enriched then
             logger.info("[GrimmorySync] Book API metadata applied:", enrich_result)
         else
             logger.warn("[GrimmorySync] Continuing without Book API metadata:", enrich_result)
+            api_error = enrich_result
         end
 
         if self.abort_sync then
@@ -5200,6 +5344,7 @@ function GrimmorySync:performMetadataRefresh()
             skipped = skipped or 0,
             local_count = #local_books,
             remote_count = #remote_books,
+            api_error = api_error,
         }
     end)
 
