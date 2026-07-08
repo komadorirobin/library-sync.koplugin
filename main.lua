@@ -88,6 +88,7 @@ local DEFAULT_PATH_RULES_FILE = dataPath("grimmory_sync_path_rules.lua")
 local MAX_HISTORY = 15
 local PROGRESS_STEP_DELAY_S = 0.2
 local AUTHOR_IMAGE_EXTS = { "jpg", "jpeg", "png", "gif", "bmp", "webp", "tiff", "tif" }
+local MIRROR_TRASH_DIR = ".library-sync-trash"
 local SIGNATURE_SEPARATOR = "\31"
 local ABORTED = "aborted"
 local SERVER_GRIMMORY = "grimmory"
@@ -439,6 +440,7 @@ function GrimmorySync:loadSettings()
             filename_profile = FILENAME_PROFILE_GRIMMORY,
             selected_feed = "",
             selected_feed_label = "",
+            mirror_selected_sync_source = false,
             auto_refresh_on_startup = false,
             auto_refresh_interval_hours = 0,
             auto_refresh_use_opds_updated = false,
@@ -512,6 +514,7 @@ function GrimmorySync:loadSettings()
         filename_profile = filename_profile,
         selected_feed = settings.selected_feed or "",
         selected_feed_label = settings.selected_feed_label or "",
+        mirror_selected_sync_source = settingToBool(settings.mirror_selected_sync_source, false),
         auto_refresh_on_startup = settingToBool(settings.auto_refresh_on_startup, false),
         auto_refresh_interval_hours = normalizeAutoRefreshInterval(settings.auto_refresh_interval_hours),
         auto_refresh_use_opds_updated = settingToBool(settings.auto_refresh_use_opds_updated, false),
@@ -542,6 +545,7 @@ function GrimmorySync:saveSettings()
     file:write("filename_profile=" .. (self.filename_profile or FILENAME_PROFILE_SYNC_DEFAULT) .. "\n")
     file:write("selected_feed=" .. (self.selected_feed or "") .. "\n")
     file:write("selected_feed_label=" .. (self.selected_feed_label or "") .. "\n")
+    file:write("mirror_selected_sync_source=" .. boolToSetting(self.mirror_selected_sync_source == true) .. "\n")
     file:write("auto_refresh_on_startup=" .. boolToSetting(self.auto_refresh_on_startup == true) .. "\n")
     file:write("auto_refresh_interval_hours=" .. tostring(self.auto_refresh_interval_hours or 0) .. "\n")
     file:write("auto_refresh_use_opds_updated=" .. boolToSetting(self.auto_refresh_use_opds_updated == true) .. "\n")
@@ -816,6 +820,7 @@ function GrimmorySync:init()
     self.filename_profile = settings.filename_profile
     self.selected_feed = settings.selected_feed or ""
     self.selected_feed_label = settings.selected_feed_label or ""
+    self.mirror_selected_sync_source = settings.mirror_selected_sync_source == true
     self.auto_refresh_on_startup = settings.auto_refresh_on_startup == true
     self.auto_refresh_interval_hours = normalizeAutoRefreshInterval(settings.auto_refresh_interval_hours)
     self.auto_refresh_use_opds_updated = settings.auto_refresh_use_opds_updated == true
@@ -1005,6 +1010,17 @@ function GrimmorySync:addToMainMenu(menu_items)
                 end,
             },
             {
+                text = _("Mirror selected sync source"),
+                checked_func = function()
+                    return self.mirror_selected_sync_source == true
+                end,
+                callback = function(touchmenu_instance)
+                    self:runAfterMenuClose(touchmenu_instance, function()
+                        self:toggleMirrorSelectedSyncSource()
+                    end)
+                end,
+            },
+            {
                 text = _("Show status"),
                 callback = function(touchmenu_instance)
                     self:runAfterMenuClose(touchmenu_instance, function()
@@ -1014,6 +1030,43 @@ function GrimmorySync:addToMainMenu(menu_items)
             },
         },
     }
+end
+
+function GrimmorySync:toggleMirrorSelectedSyncSource()
+    if self.mirror_selected_sync_source == true then
+        self.mirror_selected_sync_source = false
+        self:saveSettings()
+        UIManager:show(InfoMessage:new{
+            text = _("Mirror selected sync source disabled"),
+            timeout = 2,
+        })
+        return
+    end
+
+    local sync_source = (self.selected_feed and self.selected_feed ~= "")
+        and (self.selected_feed_label ~= "" and self.selected_feed_label or self.selected_feed)
+        or _("All books")
+
+    local confirm_dialog
+    confirm_dialog = ConfirmBox:new{
+        text = string.format(
+            _("Mirror selected sync source?\n\nSource: %s\n\nWhen enabled, Sync missing books will also move manifest-tracked local EPUBs that are no longer in this source to %s. Other local files are left untouched, and the currently open book is skipped."),
+            sync_source,
+            MIRROR_TRASH_DIR
+        ),
+        ok_text = _("Enable"),
+        cancel_text = _("Cancel"),
+        ok_callback = function()
+            pcall(function() UIManager:close(confirm_dialog) end)
+            self.mirror_selected_sync_source = true
+            self:saveSettings()
+            UIManager:show(InfoMessage:new{
+                text = _("Mirror selected sync source enabled"),
+                timeout = 3,
+            })
+        end,
+    }
+    UIManager:show(confirm_dialog)
 end
 
 function GrimmorySync:getBookshelfIntegrationMenu()
@@ -1515,7 +1568,9 @@ function GrimmorySync:scanLocalBooks()
                 
                 if ok_attr and attr then
                     if attr.mode == "directory" then
-                        scanDirectory(full_path, rel_path)
+                        if entry ~= MIRROR_TRASH_DIR then
+                            scanDirectory(full_path, rel_path)
+                        end
                     elseif attr.mode == "file" then
                         local ext = full_path:match("%.([^%.]+)$")
                         if ext and (ext:lower() == "epub" or ext:lower() == "pdf" or 
@@ -1546,15 +1601,20 @@ function GrimmorySync:buildServerUrl(endpoint)
         return endpoint
     end
 
-    local base = trim(self.server_url):gsub("/+$", "")
-    -- Accept the OPDS endpoint BookOrbit displays as well as the server origin.
-    base = base:gsub("/api/v1/opds.*$", "")
-    base = base:gsub("/api/v1$", "")
+    local base = self:serverBaseUrl()
     endpoint = tostring(endpoint or "")
     if endpoint:sub(1, 1) ~= "/" then
         endpoint = "/" .. endpoint
     end
     return base .. endpoint
+end
+
+function GrimmorySync:serverBaseUrl()
+    local base = trim(self.server_url):gsub("/+$", "")
+    -- Accept the OPDS endpoint BookOrbit displays as well as the server origin.
+    base = base:gsub("/api/v1/opds.*$", "")
+    base = base:gsub("/api/v1$", "")
+    return base
 end
 
 function GrimmorySync:ensureDirectory(path)
@@ -2896,6 +2956,67 @@ function GrimmorySync:remoteOpdsTimestamp(remote)
     return (remote and (remote.updated or remote.published)) or ""
 end
 
+function GrimmorySync:remoteBookKey(remote)
+    if type(remote) ~= "table" then
+        return nil
+    end
+
+    local book_id = trim(tostring(remote.book_id or ""))
+    if book_id ~= "" then
+        return "id:" .. book_id
+    end
+
+    local download_url = trim(tostring(remote.download_url or ""))
+    if download_url ~= "" then
+        return "url:" .. download_url
+    end
+
+    local title = trim(tostring(remote.title or ""))
+    local author = trim(tostring(remote.author or ""))
+    if title ~= "" or author ~= "" then
+        return "meta:" .. self:normalizeForComparison(title .. "|" .. author)
+    end
+
+    return nil
+end
+
+function GrimmorySync:currentSyncScope()
+    local scope = {
+        server_type = Providers.isValid(self.server_type) and self.server_type or SERVER_GRIMMORY,
+        server_url = self:serverBaseUrl(),
+        sync_source = self.selected_feed or "",
+        sync_source_label = self.selected_feed_label or "",
+    }
+    scope.key = table.concat({
+        scope.server_type,
+        scope.server_url,
+        scope.sync_source,
+    }, SIGNATURE_SEPARATOR)
+    return scope
+end
+
+function GrimmorySync:manifestScopeFields(remote)
+    local scope = self:currentSyncScope()
+    return {
+        server_type = scope.server_type,
+        server_url = scope.server_url,
+        sync_source = scope.sync_source,
+        sync_source_label = scope.sync_source_label,
+        sync_scope_key = scope.key,
+        remote_key = self:remoteBookKey(remote),
+    }
+end
+
+function GrimmorySync:manifestEntryMatchesScope(entry, scope)
+    if type(entry) ~= "table" or type(scope) ~= "table" then
+        return false
+    end
+    return entry.sync_scope_key == scope.key
+        and entry.server_type == scope.server_type
+        and entry.server_url == scope.server_url
+        and (entry.sync_source or "") == scope.sync_source
+end
+
 function GrimmorySync:manifestOpdsTimestamp(manifest_entry)
     return (manifest_entry and (manifest_entry.updated or manifest_entry.published)) or ""
 end
@@ -3054,6 +3175,7 @@ end
 
 function GrimmorySync:storeManifestEntry(manifest, path, remote)
     local key = self:manifestKeyForPath(path)
+    local scope_fields = self:manifestScopeFields(remote)
     manifest.books[key] = {
         signature = self:remoteMetadataSignature(remote),
         updated = remote.updated,
@@ -3064,8 +3186,51 @@ function GrimmorySync:storeManifestEntry(manifest, path, remote)
         hardcover_id = remote.hardcover_id,
         hardcover_book_id = remote.hardcover_book_id,
         hardcover_edition_id = remote.hardcover_edition_id,
+        server_type = scope_fields.server_type,
+        server_url = scope_fields.server_url,
+        sync_source = scope_fields.sync_source,
+        sync_source_label = scope_fields.sync_source_label,
+        sync_scope_key = scope_fields.sync_scope_key,
+        remote_key = scope_fields.remote_key,
         refreshed_at = os.time(),
     }
+end
+
+function GrimmorySync:trackManifestEntryScope(manifest, path, remote)
+    if not manifest or not path then
+        return false
+    end
+
+    local key = self:manifestKeyForPath(path)
+    local entry = manifest.books[key]
+    if type(entry) ~= "table" then
+        entry = {}
+        manifest.books[key] = entry
+    end
+
+    local scope_fields = self:manifestScopeFields(remote)
+    local changed = false
+    local function setField(field, value)
+        value = value or ""
+        if entry[field] ~= value then
+            entry[field] = value
+            changed = true
+        end
+    end
+
+    setField("server_type", scope_fields.server_type)
+    setField("server_url", scope_fields.server_url)
+    setField("sync_source", scope_fields.sync_source)
+    setField("sync_source_label", scope_fields.sync_source_label)
+    setField("sync_scope_key", scope_fields.sync_scope_key)
+    setField("remote_key", scope_fields.remote_key)
+    setField("title", remote and remote.title or entry.title)
+    setField("author", remote and remote.author or entry.author)
+
+    if changed then
+        entry.tracked_at = os.time()
+    end
+    return changed
 end
 
 function GrimmorySync:normalizePathForCompare(path)
@@ -4040,15 +4205,232 @@ function GrimmorySync:metadataRefreshMessage(stats, result, image_ok, image_resu
     return message
 end
 
+function GrimmorySync:mirrorTrashPath()
+    return (self.local_path or DEFAULT_LOCAL_PATH):gsub("/+$", "") .. "/" .. MIRROR_TRASH_DIR
+end
+
+function GrimmorySync:isPathInsideLocalLibrary(path)
+    local normalized_path = self:normalizePathForCompare(path)
+    local normalized_root = self:normalizePathForCompare((self.local_path or ""):gsub("/+$", ""))
+    return normalized_root ~= ""
+        and normalized_path:sub(1, #normalized_root + 1) == normalized_root .. "/"
+end
+
+function GrimmorySync:isMirrorTrashPath(path)
+    local relative = self:relativeBookPath(path)
+    return relative == MIRROR_TRASH_DIR
+        or relative:sub(1, #MIRROR_TRASH_DIR + 1) == MIRROR_TRASH_DIR .. "/"
+end
+
+function GrimmorySync:remoteBookKeySet(remote_books)
+    local keys = {}
+    for _, remote in ipairs(remote_books or {}) do
+        local key = self:remoteBookKey(remote)
+        if key and key ~= "" then
+            keys[key] = true
+        end
+    end
+    return keys
+end
+
+function GrimmorySync:buildMirrorCleanupQueue(local_books, remote_books, manifest)
+    local queue = {}
+    local stats = {
+        skipped_open = 0,
+        skipped_missing = 0,
+        skipped_untracked = 0,
+        skipped_outside = 0,
+    }
+
+    if self.mirror_selected_sync_source ~= true then
+        return queue, stats
+    end
+
+    manifest = manifest or self:loadManifest()
+    local scope = self:currentSyncScope()
+    local remote_keys = self:remoteBookKeySet(remote_books)
+
+    local local_paths = {}
+    for _, book in ipairs(local_books or {}) do
+        if book.path then
+            local_paths[self:normalizePathForCompare(book.path)] = true
+        end
+    end
+
+    local ok_lfs, lfs = pcall(require, "libs/libkoreader-lfs")
+    for key, entry in pairs(manifest.books or {}) do
+        local remote_key = type(entry) == "table" and entry.remote_key or nil
+        if remote_key and remote_key ~= "" and self:manifestEntryMatchesScope(entry, scope) then
+            local path = key
+            local normalized_path = self:normalizePathForCompare(path)
+            if remote_keys[remote_key] then
+                -- Still present in the selected sync source.
+            elseif not self:isPathInsideLocalLibrary(path) or self:isMirrorTrashPath(path) or not self:isEpubPath(path) then
+                stats.skipped_outside = stats.skipped_outside + 1
+            elseif self:isCurrentDocumentPath(path) then
+                stats.skipped_open = stats.skipped_open + 1
+            elseif not local_paths[normalized_path] then
+                stats.skipped_missing = stats.skipped_missing + 1
+            else
+                local attr = ok_lfs and lfs and lfs.attributes(path) or nil
+                if attr and attr.mode == "file" then
+                    queue[#queue + 1] = {
+                        key = key,
+                        path = path,
+                        title = entry.title or self:displayNameForPath(path),
+                        remote_key = remote_key,
+                    }
+                    logger.info("[GrimmorySync] Mirror cleanup candidate:", path)
+                else
+                    stats.skipped_missing = stats.skipped_missing + 1
+                end
+            end
+        elseif self:manifestEntryMatchesScope(entry, scope) then
+            stats.skipped_untracked = stats.skipped_untracked + 1
+        end
+    end
+
+    return queue, stats
+end
+
+function GrimmorySync:uniquePath(path)
+    local ok_lfs, lfs = pcall(require, "libs/libkoreader-lfs")
+    if not ok_lfs or not lfs or not lfs.attributes(path) then
+        return path
+    end
+
+    local base, ext = path:match("^(.*)(%.[^/%.]+)$")
+    if not base then
+        base, ext = path, ""
+    end
+
+    local i = 1
+    local candidate = base .. " (" .. tostring(i) .. ")" .. ext
+    while lfs.attributes(candidate) do
+        i = i + 1
+        candidate = base .. " (" .. tostring(i) .. ")" .. ext
+    end
+    return candidate
+end
+
+function GrimmorySync:moveBookToMirrorTrash(path)
+    if not self:isPathInsideLocalLibrary(path) or self:isMirrorTrashPath(path) then
+        return false, _("Refusing to move a file outside the configured library path.")
+    end
+
+    local relative = self:relativeBookPath(path)
+    local trash_batch = self:mirrorTrashPath() .. "/" .. os.date("%Y%m%d-%H%M%S")
+    local destination = self:uniquePath(trash_batch .. "/" .. relative)
+    local destination_dir = destination:match("(.+)/[^/]+$") or trash_batch
+    if not self:ensureDirectory(destination_dir) then
+        return false, _("Could not create mirror trash directory.")
+    end
+
+    local ok, err = os.rename(path, destination)
+    if not ok then
+        return false, err or _("Could not move file to mirror trash.")
+    end
+    return true, destination
+end
+
+function GrimmorySync:moveMirrorCleanupAsync(queue, manifest, done_callback)
+    local total = #queue
+    local i = 0
+    local moved = 0
+    local failed = 0
+    local skipped_open = 0
+    local last_error
+    manifest = manifest or self:loadManifest()
+
+    if total == 0 then
+        done_callback(true, {
+            moved = 0,
+            failed = 0,
+            skipped_open = 0,
+            remaining = 0,
+            trash_path = self:mirrorTrashPath(),
+        })
+        return
+    end
+
+    local function finish(success, result)
+        self:saveManifest(manifest)
+        done_callback(success, result)
+    end
+
+    local function step()
+        if self.abort_sync then
+            finish(false, {
+                error = ABORTED,
+                moved = moved,
+                failed = failed,
+                skipped_open = skipped_open,
+                remaining = total - i,
+                trash_path = self:mirrorTrashPath(),
+                last_error = last_error,
+            })
+            return
+        end
+
+        i = i + 1
+        if i > total then
+            finish(true, {
+                moved = moved,
+                failed = failed,
+                skipped_open = skipped_open,
+                remaining = 0,
+                trash_path = self:mirrorTrashPath(),
+                last_error = last_error,
+            })
+            return
+        end
+
+        local item = queue[i]
+        self:showProgressDialog(string.format(
+            _("Mirroring source %d of %d...\n\n%s\n\nMoved to trash: %d\n\nTap Cancel to stop after the current file."),
+            i,
+            total,
+            self:displayNameForPath(item.path),
+            moved
+        ))
+
+        UIManager:scheduleIn(PROGRESS_STEP_DELAY_S, function()
+            if self:isCurrentDocumentPath(item.path) then
+                skipped_open = skipped_open + 1
+            else
+                local ok, destination_or_err = self:moveBookToMirrorTrash(item.path)
+                if ok then
+                    moved = moved + 1
+                    manifest.books[item.key] = nil
+                    logger.info("[GrimmorySync] Moved removed source book to mirror trash:", item.path, "->", destination_or_err)
+                else
+                    failed = failed + 1
+                    last_error = destination_or_err
+                    logger.warn("[GrimmorySync] Mirror cleanup failed:", item.path, destination_or_err or "unknown")
+                end
+            end
+            self:saveManifest(manifest)
+            UIManager:scheduleIn(PROGRESS_STEP_DELAY_S, step)
+        end)
+    end
+
+    UIManager:scheduleIn(PROGRESS_STEP_DELAY_S, step)
+end
+
 function GrimmorySync:buildMissingBookQueue(local_books, remote_books)
     local local_index = self:buildLocalBookIndex(local_books)
     local manifest = self:loadManifest()
     local missing = {}
+    local manifest_changed = false
 
     for _, remote in ipairs(remote_books) do
         local matched_book, matched_name, fuzzy = self:findLocalMatch(remote, local_index)
 
         if matched_book then
+            if self.mirror_selected_sync_source == true
+                and self:trackManifestEntryScope(manifest, matched_book.path, remote) then
+                manifest_changed = true
+            end
             if fuzzy then
                 logger.info("[GrimmorySync] Already have:", remote.title, "(fuzzy matched:", matched_name, ")")
             else
@@ -4058,6 +4440,10 @@ function GrimmorySync:buildMissingBookQueue(local_books, remote_books)
             logger.info("[GrimmorySync] Missing book:", remote.title)
             table.insert(missing, remote)
         end
+    end
+
+    if manifest_changed then
+        self:saveManifest(manifest)
     end
 
     return missing, manifest
@@ -4797,9 +5183,13 @@ function GrimmorySync:startSync()
     self.abort_notified = false
     
     -- Show confirmation with cancel option
+    local confirm_text = _("Sync missing books?\n\nOnly books missing from this device will be downloaded. You can cancel at any time.")
+    if self.mirror_selected_sync_source == true then
+        confirm_text = _("Sync and mirror selected source?\n\nMissing books will be downloaded. Manifest-tracked local EPUBs that are no longer in the selected sync source will be moved to the local mirror trash. Other local files are left untouched. You can cancel at any time.")
+    end
     local confirm_dialog
     confirm_dialog = ConfirmBox:new{
-        text = _("Sync missing books?\n\nOnly books missing from this device will be downloaded. You can cancel at any time."),
+        text = confirm_text,
         ok_text = _("Start"),
         cancel_text = _("Cancel"),
         ok_callback = function()
@@ -4940,6 +5330,43 @@ function GrimmorySync:startMetadataRefresh()
     UIManager:show(confirm_dialog)
 end
 
+function GrimmorySync:syncCompleteMessage(stats, downloaded, cleanup_result)
+    cleanup_result = cleanup_result or {}
+    local message = string.format(
+        _("Sync complete.\n\nLocal: %d books\nServer: %d books\nDownloaded missing: %d books"),
+        stats.local_count or 0,
+        stats.remote_count or 0,
+        downloaded or 0
+    )
+
+    if self.mirror_selected_sync_source == true then
+        message = message .. string.format(
+            _("\nMoved removed to trash: %d books"),
+            cleanup_result.moved or 0
+        )
+        if (cleanup_result.skipped_open or 0) > 0 then
+            message = message .. string.format(
+                _("\nSkipped currently open: %d books"),
+                cleanup_result.skipped_open or 0
+            )
+        end
+        if (cleanup_result.failed or 0) > 0 then
+            message = message .. string.format(
+                _("\nMirror cleanup failed: %d books"),
+                cleanup_result.failed or 0
+            )
+            if cleanup_result.last_error then
+                message = message .. "\n" .. string.format(_("Latest error: %s"), tostring(cleanup_result.last_error))
+            end
+        end
+        if (cleanup_result.moved or 0) > 0 and cleanup_result.trash_path then
+            message = message .. "\n" .. string.format(_("Trash: %s"), cleanup_result.trash_path)
+        end
+    end
+
+    return message .. self:apiMetadataWarning(stats.api_error)
+end
+
 function GrimmorySync:performSync()
     if self.sync_running or self.auto_refresh_running then
         UIManager:show(InfoMessage:new{
@@ -4997,9 +5424,12 @@ function GrimmorySync:performSync()
         ))
         
         local missing, manifest = self:buildMissingBookQueue(local_books, remote_books)
+        local cleanup_queue, cleanup_stats = self:buildMirrorCleanupQueue(local_books, remote_books, manifest)
         return true, {
             missing = missing,
             manifest = manifest,
+            cleanup_queue = cleanup_queue,
+            cleanup_stats = cleanup_stats,
             local_count = #local_books,
             remote_count = #remote_books,
             api_error = api_error,
@@ -5032,17 +5462,55 @@ function GrimmorySync:performSync()
     
     local stats = payload or {}
     local missing = stats.missing or {}
+    local cleanup_queue = stats.cleanup_queue or {}
+    local cleanup_stats = stats.cleanup_stats or {}
+
+    local function finishWithMirrorCleanup(downloaded)
+        local function showResult(cleanup_result)
+            cleanup_result = cleanup_result or {}
+            cleanup_result.skipped_open = (cleanup_result.skipped_open or 0)
+                + (cleanup_stats.skipped_open or 0)
+            if (downloaded or 0) > 0 or (cleanup_result.moved or 0) > 0 then
+                self:refreshFileBrowserContent()
+            end
+            UIManager:show(InfoMessage:new{
+                text = self:syncCompleteMessage(stats, downloaded or 0, cleanup_result),
+                timeout = 5,
+            })
+            self.sync_running = false
+        end
+
+        if self.mirror_selected_sync_source == true and #cleanup_queue > 0 then
+            self:moveMirrorCleanupAsync(cleanup_queue, stats.manifest, function(cleanup_ok, cleanup_result)
+                self:closeProgressDialog()
+                cleanup_result = cleanup_result or {}
+                if not cleanup_ok and cleanup_result.error == ABORTED then
+                    UIManager:show(InfoMessage:new{
+                        text = string.format(
+                            _("Sync canceled during mirror cleanup.\n\nDownloaded: %d books\nMoved to trash: %d books\nRemaining cleanup: %d books"),
+                            downloaded or 0,
+                            cleanup_result.moved or 0,
+                            cleanup_result.remaining or 0
+                        ),
+                        timeout = 5,
+                    })
+                    self.sync_running = false
+                    return
+                end
+                showResult(cleanup_result)
+            end)
+        else
+            showResult({
+                moved = 0,
+                failed = 0,
+                skipped_open = 0,
+                trash_path = self:mirrorTrashPath(),
+            })
+        end
+    end
+
     if #missing == 0 then
-        local message = string.format(
-            _("Sync complete.\n\nLocal: %d books\nServer: %d books\nDownloaded missing: 0 books"),
-            stats.local_count or 0,
-            stats.remote_count or 0
-        ) .. self:apiMetadataWarning(stats.api_error)
-        UIManager:show(InfoMessage:new{
-            text = message,
-            timeout = 5,
-        })
-        self.sync_running = false
+        finishWithMirrorCleanup(0)
         return
     end
 
@@ -5071,21 +5539,7 @@ function GrimmorySync:performSync()
             return
         end
 
-        if (result.downloaded or 0) > 0 then
-            self:refreshFileBrowserContent()
-        end
-
-        local message = string.format(
-            _("Sync complete.\n\nLocal: %d books\nServer: %d books\nDownloaded missing: %d books"),
-            stats.local_count or 0,
-            stats.remote_count or 0,
-            result.downloaded or 0
-        ) .. self:apiMetadataWarning(stats.api_error)
-        UIManager:show(InfoMessage:new{
-            text = message,
-            timeout = 5,
-        })
-        self.sync_running = false
+        finishWithMirrorCleanup(result.downloaded or 0)
     end)
 end
 
@@ -5457,7 +5911,7 @@ function GrimmorySync:showStatus()
         api_username = _("Not set")
     end
     local text = string.format(
-        _("Server type: %s\nServer: %s\nOPDS user: %s\nAPI user: %s\nPath: %s\nLocal: %d books\nSync source: %s\nFolder profile: %s\nFile naming: %s\nCustom rules: %s\nAutomatic metadata refresh: %s\nOPDS timestamp trigger: %s\nBookshelf author images: %s\nBookshelf image path: %s"),
+        _("Server type: %s\nServer: %s\nOPDS user: %s\nAPI user: %s\nPath: %s\nLocal: %d books\nSync source: %s\nMirror selected sync source: %s\nMirror trash: %s\nFolder profile: %s\nFile naming: %s\nCustom rules: %s\nAutomatic metadata refresh: %s\nOPDS timestamp trigger: %s\nBookshelf author images: %s\nBookshelf image path: %s"),
         self:serverName(),
         self.server_url ~= "" and self.server_url or _("Not set"),
         self.username ~= "" and self.username or _("Not set"),
@@ -5465,6 +5919,8 @@ function GrimmorySync:showStatus()
         self.local_path,
         #books,
         sync_source,
+        self.mirror_selected_sync_source == true and _("on") or _("off"),
+        self:mirrorTrashPath(),
         self:routingProfileLabel(self.routing_profile or ROUTING_PROFILE_FLAT),
         self:filenameProfileLabel(self.filename_profile or FILENAME_PROFILE_SYNC_DEFAULT),
         self.path_rules_file or DEFAULT_PATH_RULES_FILE,

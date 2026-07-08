@@ -46,6 +46,8 @@ Menu -> Magnifying glass -> Library Sync -> Sync missing books
 
 Start with a restricted shelf, collection, or SmartScope if you want to verify the resulting folder and filename layout before syncing the full library.
 
+By default, sync only downloads missing books and never removes local files. Enable `Mirror selected sync source` only if you want Library Sync to move manifest-tracked books removed from the selected source to `<library>/.library-sync-trash/`.
+
 ## Troubleshooting
 
 | Problem | Check |

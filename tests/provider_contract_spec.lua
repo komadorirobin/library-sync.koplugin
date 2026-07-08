@@ -15,8 +15,27 @@ package.preload["gettext"] = function() return function(value) return value end 
 package.preload["dump"] = function() return function() return "{}" end end
 package.preload["grimmory_updater"] = function() return {} end
 local decoded_json = {}
+local fake_files = {}
+local fake_dirs = {}
 package.preload["json"] = function()
     return { decode = function(body) return decoded_json[body] end }
+end
+package.preload["libs/libkoreader-lfs"] = function()
+    return {
+        attributes = function(path)
+            if fake_files[path] then
+                return { mode = "file", size = 10 }
+            end
+            if fake_dirs[path] then
+                return { mode = "directory" }
+            end
+            return nil
+        end,
+        mkdir = function(path)
+            fake_dirs[path] = true
+            return true
+        end,
+    }
 end
 local http_requests = {}
 package.preload["ltn12"] = function()
@@ -120,6 +139,59 @@ assert(plugin:apiMetadataWarning("HTTP 400"):match("HTTP 400"))
 plugin.api_username = ""
 plugin.api_password = ""
 assert(plugin:apiMetadataWarning("HTTP 400") == "")
+plugin.local_path = "/library"
+plugin.selected_feed = "/api/v1/opds/shelves/1"
+plugin.selected_feed_label = "Shelf: Kids"
+plugin.mirror_selected_sync_source = true
+local tracked_manifest = { books = {} }
+assert(plugin:trackManifestEntryScope(tracked_manifest, "/library/keep.epub", {
+    book_id = "1",
+    title = "Keep",
+    author = "Author",
+}) == true)
+assert(tracked_manifest.books["/library/keep.epub"].remote_key == "id:1")
+assert(tracked_manifest.books["/library/keep.epub"].sync_source == "/api/v1/opds/shelves/1")
+assert(tracked_manifest.books["/library/keep.epub"].signature == nil)
+
+local remove_fields = plugin:manifestScopeFields({ book_id = "2", title = "Remove" })
+local other_source_fields = plugin:manifestScopeFields({ book_id = "3", title = "Other" })
+other_source_fields.sync_source = "/api/v1/opds/shelves/other"
+other_source_fields.sync_scope_key = table.concat({
+    other_source_fields.server_type,
+    other_source_fields.server_url,
+    other_source_fields.sync_source,
+}, string.char(31))
+tracked_manifest.books["/library/remove.epub"] = {
+    title = "Remove",
+    remote_key = remove_fields.remote_key,
+    server_type = remove_fields.server_type,
+    server_url = remove_fields.server_url,
+    sync_source = remove_fields.sync_source,
+    sync_scope_key = remove_fields.sync_scope_key,
+}
+tracked_manifest.books["/library/other.epub"] = {
+    title = "Other",
+    remote_key = other_source_fields.remote_key,
+    server_type = other_source_fields.server_type,
+    server_url = other_source_fields.server_url,
+    sync_source = other_source_fields.sync_source,
+    sync_scope_key = other_source_fields.sync_scope_key,
+}
+fake_files["/library/remove.epub"] = true
+fake_files["/library/other.epub"] = true
+local cleanup_queue, cleanup_stats = plugin:buildMirrorCleanupQueue(
+    {
+        { path = "/library/remove.epub", filename = "remove.epub" },
+        { path = "/library/other.epub", filename = "other.epub" },
+    },
+    {
+        { book_id = "1", title = "Keep", author = "Author" },
+    },
+    tracked_manifest
+)
+assert(#cleanup_queue == 1)
+assert(cleanup_queue[1].path == "/library/remove.epub")
+assert(cleanup_stats.skipped_open == 0)
 
 plugin.server_type = "bookorbit"
 plugin.server_url = "https://books.example.com"

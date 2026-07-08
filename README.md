@@ -10,6 +10,7 @@ The project and plugin directory retain the historical name `grimmory-sync.koplu
 - Recursive local EPUB scanning and fuzzy duplicate detection.
 - Paginated OPDS catalogue support with Basic authentication.
 - Downloads for books missing on the device.
+- Optional mirror mode for moving books removed from the selected sync source to local trash.
 - Safe, manifest-based metadata refresh for existing EPUB files.
 - Optional automatic metadata refresh at startup or on an interval.
 - Configurable folder routing and file naming.
@@ -135,6 +136,16 @@ BookOrbit exposes:
 - SmartScopes
 
 Select `All books (default)` before a full-library refresh.
+
+### Mirror Selected Sync Source
+
+`Mirror selected sync source` is off by default. When enabled, `Sync missing books` still downloads missing books, then moves manifest-tracked local EPUBs that are no longer present in the selected sync source to:
+
+```text
+<library>/.library-sync-trash/
+```
+
+Only files previously tracked by Library Sync for the same server and sync source are moved. Other local files are left untouched, and the currently open book is skipped. The trash folder is ignored by future local scans.
 
 ## Usage
 
