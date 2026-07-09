@@ -105,6 +105,7 @@ assert(Providers.get("grimmory").opds_root == "/api/v1/opds")
 assert(Providers.get("grimmory").api_credentials_separate == true)
 assert(Providers.get("bookorbit").book_api.endpoint == "/api/v1/books/query")
 assert(Providers.get("bookorbit").api_credentials_separate == true)
+assert(Providers.get("bookorbit").api_fallback_to_opds_credentials == true)
 
 local redirected, redirect_err = plugin:httpRequest("http://redirect.example.com/api/v1/auth/login", {
     method = "POST",
@@ -207,6 +208,34 @@ assert(plugin:buildServerUrl("/api/v1/opds") == "https://books.example.com/api/v
 plugin.server_url = "https://books.example.com/api/v1/opds"
 assert(plugin:buildServerUrl("/api/v1/opds") == "https://books.example.com/api/v1/opds")
 plugin.server_url = "https://books.example.com"
+
+local fallback_login_attempts = {}
+decoded_json["bookorbit-opds-login-ok"] = { accessToken = "opds-token" }
+plugin.httpRequest = function(_, url, options)
+    fallback_login_attempts[#fallback_login_attempts + 1] = options.body
+    assert(url == "https://books.example.com/api/v1/auth/login")
+    if options.body:match("account%-user") then
+        return nil, "HTTP 401"
+    end
+    if options.body:match("opds%-user") then
+        return "bookorbit-opds-login-ok", nil
+    end
+    return nil, "unexpected body"
+end
+local fallback_token, fallback_err = plugin:loginToServerApi()
+assert(fallback_token == "opds-token", tostring(fallback_err))
+assert(#fallback_login_attempts == 2)
+
+plugin.routing_profile = "genre_series"
+local routing_ok, routing_err = plugin:validateDownloadRoutingMetadata({ { title = "No genres", genres = {} } }, "HTTP 401")
+assert(routing_ok == false)
+assert(routing_err:match("genre metadata"))
+assert(routing_err:match("HTTP 401"))
+local routing_ok_with_genre = assert(plugin:validateDownloadRoutingMetadata({ { genres = { "Manga" } } }, nil))
+assert(routing_ok_with_genre == true)
+plugin.routing_profile = "author"
+local author_routing_ok = assert(plugin:validateDownloadRoutingMetadata({ { genres = {} } }, "HTTP 401"))
+assert(author_routing_ok == true)
 
 local entry = [[
 <entry>

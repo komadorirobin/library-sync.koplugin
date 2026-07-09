@@ -854,6 +854,39 @@ function GrimmorySync:apiCredentials()
     return trim(self.username or ""), trim(self.password or "")
 end
 
+function GrimmorySync:apiCredentialCandidates()
+    local provider = self:provider()
+    local candidates = {}
+    local seen = {}
+
+    local function add(username, password, label)
+        username = trim(username or "")
+        password = trim(password or "")
+        if username == "" or password == "" then
+            return
+        end
+        local key = username .. SIGNATURE_SEPARATOR .. password
+        if seen[key] then
+            return
+        end
+        seen[key] = true
+        candidates[#candidates + 1] = {
+            username = username,
+            password = password,
+            label = label,
+        }
+    end
+
+    local api_username, api_password = self:apiCredentials()
+    add(api_username, api_password, "account")
+
+    if provider.api_credentials_separate and provider.api_fallback_to_opds_credentials then
+        add(self.username, self.password, "OPDS")
+    end
+
+    return candidates
+end
+
 function GrimmorySync:configurationReady()
     return Providers.isValid(self.server_type) and trim(self.server_url or "") ~= ""
 end
@@ -2597,6 +2630,37 @@ function GrimmorySync:generateTargetPath(book)
     return self:normalizeTargetSubdir(target_subdir)
 end
 
+function GrimmorySync:routingProfileRequiresGenres()
+    local profile = self.routing_profile or ROUTING_PROFILE_FLAT
+    return profile == ROUTING_PROFILE_GENRE_SERIES
+        or profile == ROUTING_PROFILE_SWEDISH_EXAMPLE
+end
+
+function GrimmorySync:remoteBooksHaveGenres(remote_books)
+    for _, book in ipairs(remote_books or {}) do
+        if #(book.genres or {}) > 0 then
+            return true
+        end
+    end
+    return false
+end
+
+function GrimmorySync:validateDownloadRoutingMetadata(remote_books, api_error)
+    if not self:routingProfileRequiresGenres() or #(remote_books or {}) == 0 then
+        return true, nil
+    end
+
+    if self:remoteBooksHaveGenres(remote_books) then
+        return true, nil
+    end
+
+    local message = _("Folder profile needs genre metadata, but no genres were available from OPDS or the server API.")
+    if api_error and tostring(api_error) ~= "" then
+        message = message .. "\n\n" .. string.format(_("Extra server metadata error: %s"), tostring(api_error))
+    end
+    return false, message
+end
+
 function GrimmorySync:fileNameBase(filename)
     filename = trim(tostring(filename or ""))
     if filename == "" then return nil end
@@ -3469,42 +3533,51 @@ function GrimmorySync:apiAuthHeaders(token)
 end
 
 function GrimmorySync:loginToServerApi()
-    local api_username, api_password = self:apiCredentials()
-    if api_username == "" or api_password == "" then
+    local candidates = self:apiCredentialCandidates()
+    if #candidates == 0 then
         return nil, string.format(_("%s API sync requires an account username and password."), self:serverName())
     end
 
-    local body = jsonObject({
-        username = api_username,
-        password = api_password,
-    })
+    local last_error
+    for index, candidate in ipairs(candidates) do
+        local body = jsonObject({
+            username = candidate.username,
+            password = candidate.password,
+        })
 
-    local response, err = self:httpRequest(self:buildServerUrl(self:provider().api_login), {
-        method = "POST",
-        body = body,
-        headers = {
-            ["accept"] = "application/json",
-            ["content-type"] = "application/json",
-        },
-    })
-    if err then
-        return nil, err
-    end
-
-    local data, decode_err = jsonDecode(response)
-    if not data then
-        local token = response and response:match('"accessToken"%s*:%s*"([^"]+)"')
-        if token and token ~= "" then
-            return token, nil
+        local response, err = self:httpRequest(self:buildServerUrl(self:provider().api_login), {
+            method = "POST",
+            body = body,
+            headers = {
+                ["accept"] = "application/json",
+                ["content-type"] = "application/json",
+            },
+        })
+        if err then
+            last_error = err
+            if index < #candidates then
+                logger.warn("[GrimmorySync] Server API login failed with", candidate.label or "credentials", "credentials:", err)
+            end
+        else
+            local data, decode_err = jsonDecode(response)
+            if not data then
+                local token = response and response:match('"accessToken"%s*:%s*"([^"]+)"')
+                if token and token ~= "" then
+                    return token, nil
+                end
+                last_error = decode_err
+            elseif type(data.accessToken) == "string" and data.accessToken ~= "" then
+                if index > 1 then
+                    logger.info("[GrimmorySync] Server API login succeeded with fallback credentials:", candidate.label or "credentials")
+                end
+                return data.accessToken, nil
+            else
+                last_error = string.format(_("No access token returned by %s."), self:serverName())
+            end
         end
-        return nil, decode_err
     end
 
-    if type(data.accessToken) ~= "string" or data.accessToken == "" then
-        return nil, string.format(_("No access token returned by %s."), self:serverName())
-    end
-
-    return data.accessToken, nil
+    return nil, last_error
 end
 
 function GrimmorySync:extractBooksArray(data)
@@ -5415,6 +5488,11 @@ function GrimmorySync:performSync()
 
         if self.abort_sync then
             return false, ABORTED
+        end
+
+        local routing_ok, routing_err = self:validateDownloadRoutingMetadata(remote_books, api_error)
+        if not routing_ok then
+            return false, routing_err
         end
         
         self:showProgressDialog(string.format(
