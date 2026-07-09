@@ -323,6 +323,8 @@ local function decodeJsonString(value)
         )
     end)
     value = value:gsub("\\n", "\n")
+        :gsub("\\b", "\b")
+        :gsub("\\f", "\f")
         :gsub("\\r", "")
         :gsub("\\t", "\t")
         :gsub('\\"', '"')
@@ -331,17 +333,236 @@ local function decodeJsonString(value)
     return value
 end
 
-local function jsonDecode(body)
-    local ok_json, json = pcall(require, "json")
-    if not ok_json or not json or type(json.decode) ~= "function" then
-        return nil, _("Cannot load JSON parser")
+local JSON_NULL = {}
+
+local function parseJsonFallback(body)
+    if type(body) ~= "string" then
+        return nil
     end
 
-    local ok_decode, data = pcall(json.decode, body)
-    if not ok_decode or type(data) ~= "table" then
-        return nil, _("Could not parse JSON response")
+    local pos = 1
+    local length = #body
+
+    local function char()
+        return body:sub(pos, pos)
     end
-    return data, nil
+
+    local function skipWhitespace()
+        while pos <= length and body:sub(pos, pos):match("%s") do
+            pos = pos + 1
+        end
+    end
+
+    local parseValue
+
+    local function parseString()
+        if char() ~= '"' then
+            return nil
+        end
+        pos = pos + 1
+        local parts = {}
+        local start = pos
+
+        while pos <= length do
+            local current = char()
+            if current == '"' then
+                parts[#parts + 1] = body:sub(start, pos - 1)
+                pos = pos + 1
+                return decodeJsonString(table.concat(parts))
+            elseif current == "\\" then
+                parts[#parts + 1] = body:sub(start, pos - 1)
+                local unicode_escape = body:sub(pos, pos + 5)
+                if unicode_escape:match("^\\u%x%x%x%x$") then
+                    parts[#parts + 1] = unicode_escape
+                    pos = pos + 6
+                else
+                    local escaped = body:sub(pos, pos + 1)
+                    parts[#parts + 1] = escaped
+                    pos = pos + 2
+                end
+                start = pos
+            else
+                pos = pos + 1
+            end
+        end
+
+        return nil
+    end
+
+    local function parseNumber()
+        local start = pos
+        if char() == "-" then
+            pos = pos + 1
+        end
+
+        if char() == "0" then
+            pos = pos + 1
+        else
+            if not char():match("%d") then
+                return nil
+            end
+            while pos <= length and char():match("%d") do
+                pos = pos + 1
+            end
+        end
+
+        if char() == "." then
+            pos = pos + 1
+            if not char():match("%d") then
+                return nil
+            end
+            while pos <= length and char():match("%d") do
+                pos = pos + 1
+            end
+        end
+
+        local exponent = char()
+        if exponent == "e" or exponent == "E" then
+            pos = pos + 1
+            local sign = char()
+            if sign == "+" or sign == "-" then
+                pos = pos + 1
+            end
+            if not char():match("%d") then
+                return nil
+            end
+            while pos <= length and char():match("%d") do
+                pos = pos + 1
+            end
+        end
+
+        return tonumber(body:sub(start, pos - 1))
+    end
+
+    local function parseArray()
+        if char() ~= "[" then
+            return nil
+        end
+        pos = pos + 1
+        skipWhitespace()
+
+        local result = {}
+        if char() == "]" then
+            pos = pos + 1
+            return result
+        end
+
+        while pos <= length do
+            local value = parseValue()
+            if value == nil then
+                return nil
+            end
+            result[#result + 1] = value
+            skipWhitespace()
+
+            local separator = char()
+            if separator == "]" then
+                pos = pos + 1
+                return result
+            elseif separator ~= "," then
+                return nil
+            end
+            pos = pos + 1
+            skipWhitespace()
+        end
+
+        return nil
+    end
+
+    local function parseObject()
+        if char() ~= "{" then
+            return nil
+        end
+        pos = pos + 1
+        skipWhitespace()
+
+        local result = {}
+        if char() == "}" then
+            pos = pos + 1
+            return result
+        end
+
+        while pos <= length do
+            local key = parseString()
+            if key == nil then
+                return nil
+            end
+            skipWhitespace()
+            if char() ~= ":" then
+                return nil
+            end
+            pos = pos + 1
+            skipWhitespace()
+
+            local value = parseValue()
+            if value == nil then
+                return nil
+            end
+            result[key] = value
+            skipWhitespace()
+
+            local separator = char()
+            if separator == "}" then
+                pos = pos + 1
+                return result
+            elseif separator ~= "," then
+                return nil
+            end
+            pos = pos + 1
+            skipWhitespace()
+        end
+
+        return nil
+    end
+
+    function parseValue()
+        skipWhitespace()
+        local current = char()
+        if current == "{" then
+            return parseObject()
+        elseif current == "[" then
+            return parseArray()
+        elseif current == '"' then
+            return parseString()
+        elseif current == "-" or current:match("%d") then
+            return parseNumber()
+        elseif body:sub(pos, pos + 3) == "true" then
+            pos = pos + 4
+            return true
+        elseif body:sub(pos, pos + 4) == "false" then
+            pos = pos + 5
+            return false
+        elseif body:sub(pos, pos + 3) == "null" then
+            pos = pos + 4
+            return JSON_NULL
+        end
+        return nil
+    end
+
+    local result = parseValue()
+    skipWhitespace()
+    if result == nil or pos <= length then
+        return nil
+    end
+    return result
+end
+
+local function jsonDecode(body)
+    for _, module_name in ipairs({ "json", "dkjson", "cjson", "rapidjson" }) do
+        local ok_json, json = pcall(require, module_name)
+        if ok_json and json and type(json.decode) == "function" then
+            local ok_decode, data = pcall(json.decode, body)
+            if ok_decode and type(data) == "table" then
+                return data, nil
+            end
+        end
+    end
+
+    local fallback_data = parseJsonFallback(body)
+    if type(fallback_data) == "table" then
+        return fallback_data, nil
+    end
+    return nil, _("Could not parse JSON response")
 end
 
 local function jsonFieldString(object, field)

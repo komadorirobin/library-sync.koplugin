@@ -319,6 +319,31 @@ assert(#api_authors == 3)
 bookorbit.book_api.page_size = original_book_page_size
 bookorbit.author_api.page_size = original_author_page_size
 
+package.loaded["json"] = nil
+package.loaded["dkjson"] = nil
+package.loaded["cjson"] = nil
+package.loaded["rapidjson"] = nil
+package.preload["json"] = function() error("json unavailable") end
+package.preload["dkjson"] = function() error("dkjson unavailable") end
+package.preload["cjson"] = function() error("cjson unavailable") end
+package.preload["rapidjson"] = function() error("rapidjson unavailable") end
+plugin.httpRequest = function(_, url, options)
+    if url:match("/auth/login$") then
+        return '{"accessToken":"fallback-json-token"}', nil
+    end
+    if url:match("/books/query$") then
+        return '{"items":[{"id":7,"title":"Fallback JSON","authors":["Parser Author"],"genres":["Fiction"],"tags":["Parsed"],"seriesName":"Parser Series","seriesIndex":1}],"total":1}', nil
+    end
+    return nil, "unexpected URL: " .. tostring(url)
+end
+local fallback_json_token = assert(plugin:loginToServerApi())
+assert(fallback_json_token == "fallback-json-token")
+local fallback_json_books = assert(plugin:fetchBookMetadataFromServerApi(fallback_json_token))
+assert(#fallback_json_books == 1)
+assert(fallback_json_books[1].genres[1] == "Fiction")
+assert(fallback_json_books[1].tags[1] == "Parsed")
+assert(fallback_json_books[1].authors[1] == "Parser Author")
+
 local remote = {
     book_id = "42",
     title = "The Apollo Murders",
