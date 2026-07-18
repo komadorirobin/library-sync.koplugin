@@ -1,6 +1,6 @@
 return {
     rules = {
-        -- Grimmory OPDS categories are exposed as genres/tags here.
+        -- Server OPDS categories and API tags are exposed as genres/tags here.
         {
             tags = { "Manga", "Comics" },
             series = true,

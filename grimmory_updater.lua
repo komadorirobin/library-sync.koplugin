@@ -5,8 +5,7 @@ local logger = require("logger")
 local _ = require("gettext")
 
 local GITHUB_OWNER = "komadorirobin"
-local GITHUB_REPO = "grimmory-sync.koplugin"
-local ASSET_NAME = "grimmory-sync.koplugin.zip"
+local GITHUB_REPO = "library-sync.koplugin"
 local API_URL = string.format(
     "https://api.github.com/repos/%s/%s/releases/latest",
     GITHUB_OWNER,
@@ -16,7 +15,16 @@ local API_URL = string.format(
 local Updater = {}
 
 local PLUGIN_DIR = (debug.getinfo(1, "S").source or ""):match("^@(.+)/[^/]+$")
-    or "/storage/emulated/0/koreader/plugins/grimmory-sync.koplugin"
+    or "/storage/emulated/0/koreader/plugins/library-sync.koplugin"
+local PLUGIN_DIR_NAME = PLUGIN_DIR:match("([^/]+)$") or "library-sync.koplugin"
+local PREFERRED_ASSET_NAME = PLUGIN_DIR_NAME == "grimmory-sync.koplugin"
+    and "grimmory-sync.koplugin.zip"
+    or "library-sync.koplugin.zip"
+local ASSET_NAMES = {
+    PREFERRED_ASSET_NAME,
+    "library-sync.koplugin.zip",
+    "grimmory-sync.koplugin.zip",
+}
 
 local function currentVersion()
     local ok, meta = pcall(dofile, PLUGIN_DIR .. "/_meta.lua")
@@ -159,6 +167,15 @@ local function decodeJsonString(value)
     return value
 end
 
+local function wantedAssetName(name)
+    for _, asset_name in ipairs(ASSET_NAMES) do
+        if name == asset_name then
+            return true
+        end
+    end
+    return false
+end
+
 local function cleanReleaseNotes(notes)
     if not notes or notes == "" then return nil end
     notes = notes:gsub("#+%s*", "")
@@ -185,9 +202,12 @@ local function parseRelease(body)
 
             local download_url
             for _, asset in ipairs(data.assets or {}) do
-                if asset.name == ASSET_NAME then
+                if asset.name == PREFERRED_ASSET_NAME then
                     download_url = asset.browser_download_url
                     break
+                end
+                if not download_url and wantedAssetName(asset.name) then
+                    download_url = asset.browser_download_url
                 end
                 if not download_url and type(asset.name) == "string" and asset.name:match("%.zip$") then
                     download_url = asset.browser_download_url
@@ -208,9 +228,15 @@ local function parseRelease(body)
         return nil, "could not parse tag_name"
     end
 
-    local asset_pattern = '"browser_download_url"%s*:%s*"([^"]*'
-        .. ASSET_NAME:gsub("%.", "%%.") .. '[^"]*)"'
-    local download_url = body:match(asset_pattern)
+    local download_url
+    for _, asset_name in ipairs(ASSET_NAMES) do
+        local asset_pattern = '"browser_download_url"%s*:%s*"([^"]*'
+            .. asset_name:gsub("%.", "%%.") .. '[^"]*)"'
+        download_url = body:match(asset_pattern)
+        if download_url then
+            break
+        end
+    end
     if not download_url then
         download_url = body:match('"browser_download_url"%s*:%s*"([^"]+%.zip)"')
     end
@@ -245,12 +271,12 @@ local function tmpZipPath()
     if ok_datastorage and datastorage then
         local settings_dir = datastorage:getSettingsDir()
         if settings_dir then
-            candidates[#candidates + 1] = settings_dir .. "/grimmory_sync_update.zip"
+            candidates[#candidates + 1] = settings_dir .. "/library_sync_update.zip"
         end
     end
 
-    candidates[#candidates + 1] = "/tmp/grimmory_sync_update.zip"
-    candidates[#candidates + 1] = PLUGIN_DIR .. "/grimmory_sync_update.zip"
+    candidates[#candidates + 1] = "/tmp/library_sync_update.zip"
+    candidates[#candidates + 1] = PLUGIN_DIR .. "/library_sync_update.zip"
 
     for _, path in ipairs(candidates) do
         local file = io.open(path, "wb")
@@ -261,7 +287,7 @@ local function tmpZipPath()
         end
     end
 
-    return PLUGIN_DIR .. "/grimmory_sync_update.zip"
+    return PLUGIN_DIR .. "/library_sync_update.zip"
 end
 
 local function unzip(zip_path, destination)

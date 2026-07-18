@@ -2,7 +2,7 @@
 
 Library Sync mirrors EPUB books and metadata from a Grimmory or BookOrbit server into a local KOReader library. It scans local files, compares them with a selected OPDS catalogue, downloads missing books, and can safely replace existing EPUB files when server metadata changes.
 
-The project and plugin directory retain the historical name `grimmory-sync.koplugin` so existing installations and OTA updates continue to work.
+The plugin was previously distributed as `grimmory-sync.koplugin`. New installations should use `library-sync.koplugin`; existing `grimmory-sync.koplugin` installations remain supported for OTA updates and settings migration. Do not install both directories at the same time.
 
 ## Features
 
@@ -35,7 +35,7 @@ Library Sync complements BookOrbit's official KOReader plugin. Library Sync hand
 Copy the complete plugin directory to:
 
 ```text
-<koreader>/plugins/grimmory-sync.koplugin/
+<koreader>/plugins/library-sync.koplugin/
 ```
 
 The directory must contain at least:
@@ -45,6 +45,8 @@ _meta.lua
 main.lua
 providers/
 ```
+
+Legacy upgrades may still live in `<koreader>/plugins/grimmory-sync.koplugin/`. That is supported, but new manual installs should use the Library Sync directory name.
 
 Restart KOReader. The plugin appears under:
 
@@ -99,7 +101,7 @@ Credentials are stored as plain text in KOReader's platform-specific `settings/`
 - `Library root`: place all EPUB files directly in the library directory.
 - `Author folders`: organize books under author-sort names.
 - `Genre/series folders`: organize books by the first genre or tag, then series.
-- `Custom rules file`: load custom Lua rules from `grimmory_sync_path_rules.lua` or another configured path.
+- `Custom rules file`: load custom Lua rules from `library_sync_path_rules.lua` or another configured path. Existing `grimmory_sync_path_rules.lua` paths remain valid when saved in settings.
 - `Swedish genre example`: retain the bundled example for Swedish library tags.
 
 New installations default to `Library root`. Existing installations without a saved profile retain the earlier Swedish example behavior to avoid moving an established library layout.
@@ -161,7 +163,7 @@ To replace matched local EPUB files when metadata has changed:
 Menu -> Magnifying glass -> Library Sync -> Refresh existing metadata
 ```
 
-The first metadata refresh records the current state in `grimmory_sync_manifest.lua` and may refresh previously untracked books once. Later runs skip unchanged books. Replacements are downloaded to a temporary file, checked for non-zero size, and moved into place only after the existing file has been backed up.
+The first metadata refresh records the current state in `library_sync_manifest.lua` and may refresh previously untracked books once. Later runs skip unchanged books. Replacements are downloaded to a temporary file, checked for non-zero size, and moved into place only after the existing file has been backed up. Existing `grimmory_sync_manifest.lua` files are read as migration fallbacks.
 
 The currently open book is skipped. To refresh one EPUB, long-press it in KOReader's file browser and choose `Refresh server metadata`. To refresh the open book, use `Refresh open book metadata`; Library Sync will ask before closing it.
 
@@ -205,11 +207,11 @@ Existing images are skipped. Grimmory uses its author media API, and BookOrbit u
 
 ## OTA Updates
 
-Use `Library Sync -> Check for updates`. The updater still downloads `grimmory-sync.koplugin.zip` from this repository so existing installations remain on the same update channel.
+Use `Library Sync -> Check for updates`. The release contains both `library-sync.koplugin.zip` for new installs and `grimmory-sync.koplugin.zip` for legacy OTA installs. The updater selects the ZIP that matches the current plugin directory.
 
 ## Storage and Compatibility
 
-Settings, history, and metadata manifests are stored in KOReader's platform-specific `settings/` directory. Existing Android-root `grimmory_sync_*` files and older `booklore_sync_*` files remain readable migration fallbacks.
+Settings, history, and metadata manifests are stored in KOReader's platform-specific `settings/` directory as `library_sync_*` files. Existing Android-root `grimmory_sync_*` files and older `booklore_sync_*` files remain readable migration fallbacks.
 
 Custom rules should remain outside the plugin directory so OTA updates cannot overwrite them.
 

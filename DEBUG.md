@@ -5,7 +5,7 @@
 Verify the exact directory structure:
 
 ```text
-<koreader>/plugins/grimmory-sync.koplugin/
+<koreader>/plugins/library-sync.koplugin/
   _meta.lua
   main.lua
   grimmory_updater.lua
@@ -17,17 +17,20 @@ Verify the exact directory structure:
 
 Common causes:
 
-- The ZIP created a nested `grimmory-sync.koplugin/grimmory-sync.koplugin/` directory.
+- The ZIP created a nested `library-sync.koplugin/library-sync.koplugin/` directory.
 - The directory does not end in `.koplugin`.
 - KOReader was backgrounded instead of fully restarted.
 - The files were copied to a different KOReader installation's storage directory.
+- Both `library-sync.koplugin` and the legacy `grimmory-sync.koplugin` directory are installed at the same time.
+
+Existing legacy installs under `<koreader>/plugins/grimmory-sync.koplugin/` are still supported. New manual installs should use `library-sync.koplugin`.
 
 ## Check Lua syntax
 
 From a system with Lua installed:
 
 ```bash
-cd grimmory-sync.koplugin
+cd library-sync.koplugin
 luac -p main.lua _meta.lua grimmory_updater.lua providers/*.lua
 ```
 
@@ -45,9 +48,11 @@ Search for:
 [GrimmorySync]
 grimmorysync
 grimmory-sync.koplugin
+library-sync.koplugin
+library_sync
 ```
 
-The internal identifiers retain the old Grimmory name for compatibility even when BookOrbit is selected.
+Some internal identifiers retain the old Grimmory name for compatibility even when BookOrbit is selected.
 
 ## Connection failures
 

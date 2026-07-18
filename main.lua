@@ -64,27 +64,33 @@ local function openFirstReadable(paths)
     return nil, nil
 end
 
-local SETTINGS_FILE = settingsPath("grimmory_sync_settings.txt")
+local SETTINGS_FILE = settingsPath("library_sync_settings.txt")
 local SETTINGS_READ_FILES = {
     SETTINGS_FILE,
+    androidLegacyPath("library_sync_settings.txt"),
+    settingsPath("grimmory_sync_settings.txt"),
     androidLegacyPath("grimmory_sync_settings.txt"),
     settingsPath("booklore_sync_settings.txt"),
     androidLegacyPath("booklore_sync_settings.txt"),
 }
-local HISTORY_FILE = settingsPath("grimmory_sync_history.lua")
+local HISTORY_FILE = settingsPath("library_sync_history.lua")
 local HISTORY_READ_FILES = {
     HISTORY_FILE,
+    androidLegacyPath("library_sync_history.lua"),
+    settingsPath("grimmory_sync_history.lua"),
     androidLegacyPath("grimmory_sync_history.lua"),
     settingsPath("booklore_sync_history.lua"),
     androidLegacyPath("booklore_sync_history.lua"),
 }
-local MANIFEST_FILE = settingsPath("grimmory_sync_manifest.lua")
+local MANIFEST_FILE = settingsPath("library_sync_manifest.lua")
 local MANIFEST_READ_FILES = {
     MANIFEST_FILE,
+    androidLegacyPath("library_sync_manifest.lua"),
+    settingsPath("grimmory_sync_manifest.lua"),
     androidLegacyPath("grimmory_sync_manifest.lua"),
 }
 local DEFAULT_LOCAL_PATH = isAndroid() and ANDROID_LIBRARY_DIR or DATA_DIR
-local DEFAULT_PATH_RULES_FILE = dataPath("grimmory_sync_path_rules.lua")
+local DEFAULT_PATH_RULES_FILE = dataPath("library_sync_path_rules.lua")
 local MAX_HISTORY = 15
 local PROGRESS_STEP_DELAY_S = 0.2
 local AUTHOR_IMAGE_EXTS = { "jpg", "jpeg", "png", "gif", "bmp", "webp", "tiff", "tif" }

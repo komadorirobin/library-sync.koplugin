@@ -2,21 +2,23 @@
 
 ## 1. Copy the plugin
 
-Copy the complete `grimmory-sync.koplugin` directory to KOReader's plugin directory:
+Copy the complete `library-sync.koplugin` directory to KOReader's plugin directory:
 
 ```text
-<koreader>/plugins/grimmory-sync.koplugin/
+<koreader>/plugins/library-sync.koplugin/
 ```
 
 The files must be directly inside that directory, not inside a second nested directory. At minimum, verify that these paths exist:
 
 ```text
-<koreader>/plugins/grimmory-sync.koplugin/_meta.lua
-<koreader>/plugins/grimmory-sync.koplugin/main.lua
-<koreader>/plugins/grimmory-sync.koplugin/providers/init.lua
+<koreader>/plugins/library-sync.koplugin/_meta.lua
+<koreader>/plugins/library-sync.koplugin/main.lua
+<koreader>/plugins/library-sync.koplugin/providers/init.lua
 ```
 
 `<koreader>` is KOReader's user storage directory on the device.
+
+Existing installations may still use `<koreader>/plugins/grimmory-sync.koplugin/`. That legacy directory name is supported for OTA updates. Do not keep both `library-sync.koplugin` and `grimmory-sync.koplugin` installed at the same time.
 
 ## 2. Restart KOReader
 
@@ -66,4 +68,4 @@ KOReader's log is normally located at:
 <koreader>/crash.log
 ```
 
-Search for `[GrimmorySync]` or `grimmorysync`; these internal identifiers are retained for compatibility.
+Search for `[GrimmorySync]`, `grimmorysync`, or `library_sync`; some internal identifiers retain the old Grimmory name for compatibility.
