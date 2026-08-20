@@ -1310,7 +1310,7 @@ function GrimmorySync:toggleMirrorSelectedSyncSource()
     local confirm_dialog
     confirm_dialog = ConfirmBox:new{
         text = string.format(
-            _("Mirror selected sync source?\n\nSource: %s\n\nWhen enabled, Sync missing books will also move manifest-tracked local EPUBs that are no longer in this source to %s. Other local files are left untouched, and the currently open book is skipped."),
+            _("Mirror selected sync source?\n\nSource: %s\n\nWhen enabled, Sync missing books will also move manifest-tracked local EPUBs that are no longer in this source, plus older tracked duplicates of the same server book, to %s. Other local files are left untouched, and the currently open book is skipped."),
             sync_source,
             MIRROR_TRASH_DIR
         ),
@@ -3172,6 +3172,7 @@ function GrimmorySync:buildLocalBookIndex(local_books)
     local index = {
         lookup = {},
         path_lookup = {},
+        absolute_path_lookup = {},
         files = {},
     }
 
@@ -3185,6 +3186,9 @@ function GrimmorySync:buildLocalBookIndex(local_books)
         end
         for _, key in ipairs(self:comparisonKeyVariants((book.filename or ""):gsub("\\", "/"))) do
             index.path_lookup[key] = book
+        end
+        if book.path then
+            index.absolute_path_lookup[self:normalizePathForCompare(book.path)] = book
         end
         table.insert(index.files, {
             normalized = normalized,
@@ -5007,6 +5011,70 @@ function GrimmorySync:remoteBookKeySet(remote_books)
     return keys
 end
 
+function GrimmorySync:preferredDownloadRelativePath(book)
+    local target_subdir = self:generateTargetPath(book)
+    local filename = self:preferredDownloadFilename(book)
+    if target_subdir and target_subdir ~= "" then
+        return target_subdir:gsub("/+$", "") .. "/" .. filename
+    end
+    return filename
+end
+
+function GrimmorySync:manifestIdentityCandidates(remote, local_index, manifest, scope)
+    local candidates = {}
+    local remote_key = self:remoteBookKey(remote)
+    if not remote_key or remote_key == "" then
+        return candidates
+    end
+
+    scope = scope or self:currentSyncScope()
+    for key, entry in pairs((manifest and manifest.books) or {}) do
+        if type(entry) == "table"
+            and entry.remote_key == remote_key
+            and self:manifestEntryMatchesScope(entry, scope) then
+            local normalized_path = self:normalizePathForCompare(key)
+            local book = local_index.absolute_path_lookup[normalized_path]
+            if book then
+                candidates[#candidates + 1] = {
+                    key = key,
+                    path = key,
+                    book = book,
+                    entry = entry,
+                }
+            end
+        end
+    end
+    return candidates
+end
+
+function GrimmorySync:selectCanonicalManifestCandidate(remote, candidates)
+    if #(candidates or {}) == 0 then return nil end
+    if #candidates == 1 then return candidates[1] end
+
+    local preferred = self:normalizeForComparison(self:preferredDownloadRelativePath(remote))
+    for _, candidate in ipairs(candidates) do
+        local relative = self:normalizeForComparison(self:relativeBookPath(candidate.path))
+        if preferred ~= "" and relative == preferred then
+            return candidate
+        end
+    end
+
+    table.sort(candidates, function(a, b)
+        local a_time = tonumber(a.entry.refreshed_at or a.entry.tracked_at) or 0
+        local b_time = tonumber(b.entry.refreshed_at or b.entry.tracked_at) or 0
+        if a_time ~= b_time then return a_time > b_time end
+        return tostring(a.path) < tostring(b.path)
+    end)
+    return candidates[1]
+end
+
+function GrimmorySync:findManifestIdentityMatch(remote, local_index, manifest, scope)
+    local candidates = self:manifestIdentityCandidates(remote, local_index, manifest, scope)
+    local canonical = self:selectCanonicalManifestCandidate(remote, candidates)
+    if not canonical then return nil, nil, candidates end
+    return canonical.book, canonical, candidates
+end
+
 function GrimmorySync:buildMirrorCleanupQueue(local_books, remote_books, manifest)
     local queue = {}
     local stats = {
@@ -5014,6 +5082,7 @@ function GrimmorySync:buildMirrorCleanupQueue(local_books, remote_books, manifes
         skipped_missing = 0,
         skipped_untracked = 0,
         skipped_outside = 0,
+        duplicate_candidates = 0,
     }
 
     if self.mirror_selected_sync_source ~= true then
@@ -5023,6 +5092,34 @@ function GrimmorySync:buildMirrorCleanupQueue(local_books, remote_books, manifes
     manifest = manifest or self:loadManifest()
     local scope = self:currentSyncScope()
     local remote_keys = self:remoteBookKeySet(remote_books)
+    local local_index = self:buildLocalBookIndex(local_books)
+    local duplicate_paths = {}
+    local checked_remote_keys = {}
+
+    for _, remote in ipairs(remote_books or {}) do
+        local remote_key = self:remoteBookKey(remote)
+        if remote_key and not checked_remote_keys[remote_key] then
+            checked_remote_keys[remote_key] = true
+            local candidates = self:manifestIdentityCandidates(remote, local_index, manifest, scope)
+            if #candidates > 1 then
+                local canonical = self:selectCanonicalManifestCandidate(remote, candidates)
+                for _, candidate in ipairs(candidates) do
+                    if not canonical or candidate.key ~= canonical.key then
+                        duplicate_paths[candidate.key] = true
+                        stats.duplicate_candidates = stats.duplicate_candidates + 1
+                        logger.info(
+                            "[GrimmorySync] Tracked duplicate candidate:",
+                            candidate.path,
+                            "remote:",
+                            tostring(remote_key),
+                            "keeping:",
+                            canonical and canonical.path or "none"
+                        )
+                    end
+                end
+            end
+        end
+    end
 
     local local_paths = {}
     for _, book in ipairs(local_books or {}) do
@@ -5037,7 +5134,28 @@ function GrimmorySync:buildMirrorCleanupQueue(local_books, remote_books, manifes
         if remote_key and remote_key ~= "" and self:manifestEntryMatchesScope(entry, scope) then
             local path = key
             local normalized_path = self:normalizePathForCompare(path)
-            if remote_keys[remote_key] then
+            if duplicate_paths[key] then
+                if not self:isPathInsideLocalLibrary(path) or self:isMirrorTrashPath(path) or not self:isEpubPath(path) then
+                    stats.skipped_outside = stats.skipped_outside + 1
+                elseif self:isCurrentDocumentPath(path) then
+                    stats.skipped_open = stats.skipped_open + 1
+                elseif not local_paths[normalized_path] then
+                    stats.skipped_missing = stats.skipped_missing + 1
+                else
+                    local attr = ok_lfs and lfs and lfs.attributes(path) or nil
+                    if attr and attr.mode == "file" then
+                        queue[#queue + 1] = {
+                            key = key,
+                            path = path,
+                            title = entry.title or self:displayNameForPath(path),
+                            remote_key = remote_key,
+                            reason = "duplicate",
+                        }
+                    else
+                        stats.skipped_missing = stats.skipped_missing + 1
+                    end
+                end
+            elseif remote_keys[remote_key] then
                 -- Still present in the selected sync source.
             elseif not self:isPathInsideLocalLibrary(path) or self:isMirrorTrashPath(path) or not self:isEpubPath(path) then
                 stats.skipped_outside = stats.skipped_outside + 1
@@ -5053,6 +5171,7 @@ function GrimmorySync:buildMirrorCleanupQueue(local_books, remote_books, manifes
                         path = path,
                         title = entry.title or self:displayNameForPath(path),
                         remote_key = remote_key,
+                        reason = "removed",
                     }
                     logger.info("[GrimmorySync] Mirror cleanup candidate:", path)
                 else
@@ -5111,6 +5230,8 @@ function GrimmorySync:moveMirrorCleanupAsync(queue, manifest, done_callback)
     local total = #queue
     local i = 0
     local moved = 0
+    local removed_moved = 0
+    local duplicates_moved = 0
     local failed = 0
     local skipped_open = 0
     local last_error
@@ -5119,6 +5240,8 @@ function GrimmorySync:moveMirrorCleanupAsync(queue, manifest, done_callback)
     if total == 0 then
         done_callback(true, {
             moved = 0,
+            removed_moved = 0,
+            duplicates_moved = 0,
             failed = 0,
             skipped_open = 0,
             remaining = 0,
@@ -5137,6 +5260,8 @@ function GrimmorySync:moveMirrorCleanupAsync(queue, manifest, done_callback)
             finish(false, {
                 error = ABORTED,
                 moved = moved,
+                removed_moved = removed_moved,
+                duplicates_moved = duplicates_moved,
                 failed = failed,
                 skipped_open = skipped_open,
                 remaining = total - i,
@@ -5150,6 +5275,8 @@ function GrimmorySync:moveMirrorCleanupAsync(queue, manifest, done_callback)
         if i > total then
             finish(true, {
                 moved = moved,
+                removed_moved = removed_moved,
+                duplicates_moved = duplicates_moved,
                 failed = failed,
                 skipped_open = skipped_open,
                 remaining = 0,
@@ -5175,8 +5302,20 @@ function GrimmorySync:moveMirrorCleanupAsync(queue, manifest, done_callback)
                 local ok, destination_or_err = self:moveBookToMirrorTrash(item.path)
                 if ok then
                     moved = moved + 1
+                    if item.reason == "duplicate" then
+                        duplicates_moved = duplicates_moved + 1
+                    else
+                        removed_moved = removed_moved + 1
+                    end
                     manifest.books[item.key] = nil
-                    logger.info("[GrimmorySync] Moved removed source book to mirror trash:", item.path, "->", destination_or_err)
+                    logger.info(
+                        "[GrimmorySync] Moved mirror cleanup book to trash:",
+                        item.path,
+                        "reason:",
+                        item.reason or "removed",
+                        "->",
+                        destination_or_err
+                    )
                 else
                     failed = failed + 1
                     last_error = destination_or_err
@@ -5196,16 +5335,33 @@ function GrimmorySync:buildMissingBookQueue(local_books, remote_books)
     local manifest = self:loadManifest()
     local missing = {}
     local manifest_changed = false
+    local scope = self:currentSyncScope()
 
     for _, remote in ipairs(remote_books) do
-        local matched_book, matched_name, fuzzy = self:findLocalMatch(remote, local_index)
+        local matched_book, identity_match = self:findManifestIdentityMatch(remote, local_index, manifest, scope)
+        local matched_name
+        local fuzzy = false
+        if identity_match then
+            matched_name = "manifest " .. tostring(identity_match.entry.remote_key)
+            logger.info(
+                "[GrimmorySync] Already have:",
+                remote.title,
+                "(identity matched:",
+                identity_match.path,
+                ")"
+            )
+        else
+            matched_book, matched_name, fuzzy = self:findLocalMatch(remote, local_index)
+        end
 
         if matched_book then
             if self.mirror_selected_sync_source == true
                 and self:trackManifestEntryScope(manifest, matched_book.path, remote) then
                 manifest_changed = true
             end
-            if fuzzy then
+            if identity_match then
+                -- Identity match was already logged with its tracked path.
+            elseif fuzzy then
                 logger.info("[GrimmorySync] Already have:", remote.title, "(fuzzy matched:", matched_name, ")")
             else
                 logger.info("[GrimmorySync] Already have:", remote.title, "(matched:", matched_name, ")")
@@ -5341,6 +5497,7 @@ function GrimmorySync:buildMetadataRefreshQueue(local_books, remote_books, optio
     local matched = {}
     local skipped = 0
     local manifest_changed = false
+    local scope = self:currentSyncScope()
     local queue_stats = {
         skipped_open = 0,
         metadata_changed = 0,
@@ -5348,7 +5505,20 @@ function GrimmorySync:buildMetadataRefreshQueue(local_books, remote_books, optio
     }
 
     for _, remote in ipairs(remote_books) do
-        local matched_book, matched_name, fuzzy = self:findLocalMatch(remote, local_index)
+        local matched_book, identity_match = self:findManifestIdentityMatch(remote, local_index, manifest, scope)
+        local matched_name
+        local fuzzy = false
+        if identity_match then
+            matched_name = "manifest " .. tostring(identity_match.entry.remote_key)
+            logger.info(
+                "[GrimmorySync] Identity matched metadata refresh:",
+                remote.title,
+                "->",
+                identity_match.path
+            )
+        else
+            matched_book, matched_name, fuzzy = self:findLocalMatch(remote, local_index)
+        end
         if matched_book and matched_book.path then
             if options.skip_open_book and self:isCurrentDocumentPath(matched_book.path) then
                 skipped = skipped + 1
@@ -5586,17 +5756,7 @@ function GrimmorySync:downloadBook(book, target_path, options)
         dir_path = full_path:match("(.+)/[^/]+$") or self.local_path
         display_path = full_path
     else
-        -- Generate target directory path based on genres/series
-        local target_subdir = self:generateTargetPath(book)
-
-        local filename_only = self:preferredDownloadFilename(book)
-
-        -- Combine subdirectory and filename
-        if target_subdir and target_subdir ~= "" then
-            display_path = target_subdir .. "/" .. filename_only
-        else
-            display_path = filename_only
-        end
+        display_path = self:preferredDownloadRelativePath(book)
 
         if display_path:match("/") then
             full_path = self.local_path .. "/" .. display_path
@@ -5959,7 +6119,7 @@ function GrimmorySync:startSync()
     -- Show confirmation with cancel option
     local confirm_text = _("Sync missing books?\n\nOnly books missing from this device will be downloaded. You can cancel at any time.")
     if self.mirror_selected_sync_source == true then
-        confirm_text = _("Sync and mirror selected source?\n\nMissing books will be downloaded. Manifest-tracked local EPUBs that are no longer in the selected sync source will be moved to the local mirror trash. Other local files are left untouched. You can cancel at any time.")
+        confirm_text = _("Sync and mirror selected source?\n\nMissing books will be downloaded. Manifest-tracked local EPUBs that are no longer in the selected sync source, plus older tracked duplicates of the same server book, will be moved to the local mirror trash. Other local files are left untouched. You can cancel at any time.")
     end
     local confirm_dialog
     confirm_dialog = ConfirmBox:new{
@@ -6115,8 +6275,12 @@ function GrimmorySync:syncCompleteMessage(stats, downloaded, cleanup_result)
 
     if self.mirror_selected_sync_source == true then
         message = message .. string.format(
-            _("\nMoved removed to trash: %d books"),
-            cleanup_result.moved or 0
+            _("\nMoved removed from source to trash: %d books"),
+            cleanup_result.removed_moved or 0
+        )
+        message = message .. string.format(
+            _("\nMoved tracked duplicates to trash: %d books"),
+            cleanup_result.duplicates_moved or 0
         )
         if (cleanup_result.skipped_open or 0) > 0 then
             message = message .. string.format(
@@ -6281,6 +6445,8 @@ function GrimmorySync:performSync()
         else
             showResult({
                 moved = 0,
+                removed_moved = 0,
+                duplicates_moved = 0,
                 failed = 0,
                 skipped_open = 0,
                 trash_path = self:mirrorTrashPath(),

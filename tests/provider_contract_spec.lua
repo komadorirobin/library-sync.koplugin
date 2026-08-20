@@ -488,6 +488,82 @@ assert(remote.hardcover_id == "the-apollo-murders")
 assert(remote.hardcover_edition_id == "12345")
 assert(plugin:preferredDownloadFilename(remote) == "The Apollo Murders - Chris Hadfield.epub")
 
+plugin.selected_feed = ""
+plugin.selected_feed_label = ""
+plugin.mirror_selected_sync_source = true
+local old_volume_path = "/library/Insomniacs After School, Vol. 01 - Makoto Ojiro.epub"
+local new_volume_path = "/library/Insomniacs After School, Vol. 1 - Makoto Ojiro.epub"
+local old_volume = {
+    book_id = "volume-1",
+    title = "Insomniacs After School, Vol. 01",
+    author = "Makoto Ojiro",
+    genres = {},
+}
+local renamed_volume = {
+    book_id = "volume-1",
+    title = "Insomniacs After School, Vol. 1",
+    author = "Makoto Ojiro",
+    genres = {},
+}
+local identity_manifest = { version = 1, books = {} }
+plugin:storeManifestEntry(identity_manifest, old_volume_path, old_volume)
+identity_manifest.books[old_volume_path].refreshed_at = 1
+fake_files[old_volume_path] = true
+
+local original_load_manifest = plugin.loadManifest
+local original_save_manifest = plugin.saveManifest
+plugin.loadManifest = function() return identity_manifest end
+plugin.saveManifest = function() return true end
+
+local renamed_missing = assert(plugin:buildMissingBookQueue({
+    { path = old_volume_path, filename = "Insomniacs After School, Vol. 01 - Makoto Ojiro.epub" },
+}, { renamed_volume }))
+assert(#renamed_missing == 0)
+
+local renamed_refresh = assert(plugin:buildMetadataRefreshQueue({
+    { path = old_volume_path, filename = "Insomniacs After School, Vol. 01 - Makoto Ojiro.epub" },
+}, { renamed_volume }))
+assert(#renamed_refresh == 1)
+assert(renamed_refresh[1].local_path == old_volume_path)
+
+local old_subtitle_path = "/library/The Murderbot Diaries All Systems Red - Martha Wells.epub"
+local old_subtitle_title = {
+    book_id = "subtitle-1",
+    title = "The Murderbot Diaries: All Systems Red",
+    author = "Martha Wells",
+    genres = {},
+}
+local separated_subtitle = {
+    book_id = "subtitle-1",
+    title = "All Systems Red",
+    subtitle = "The Murderbot Diaries",
+    author = "Martha Wells",
+    genres = {},
+}
+plugin:storeManifestEntry(identity_manifest, old_subtitle_path, old_subtitle_title)
+fake_files[old_subtitle_path] = true
+local subtitle_refresh = assert(plugin:buildMetadataRefreshQueue({
+    { path = old_subtitle_path, filename = "The Murderbot Diaries All Systems Red - Martha Wells.epub" },
+}, { separated_subtitle }))
+assert(#subtitle_refresh == 1)
+assert(subtitle_refresh[1].local_path == old_subtitle_path)
+
+plugin:storeManifestEntry(identity_manifest, new_volume_path, renamed_volume)
+identity_manifest.books[new_volume_path].refreshed_at = 2
+fake_files[new_volume_path] = true
+local duplicate_cleanup, duplicate_stats = plugin:buildMirrorCleanupQueue({
+    { path = old_volume_path, filename = "Insomniacs After School, Vol. 01 - Makoto Ojiro.epub" },
+    { path = new_volume_path, filename = "Insomniacs After School, Vol. 1 - Makoto Ojiro.epub" },
+    { path = old_subtitle_path, filename = "The Murderbot Diaries All Systems Red - Martha Wells.epub" },
+}, { renamed_volume, separated_subtitle }, identity_manifest)
+assert(#duplicate_cleanup == 1)
+assert(duplicate_cleanup[1].path == old_volume_path)
+assert(duplicate_cleanup[1].reason == "duplicate")
+assert(duplicate_stats.duplicate_candidates == 1)
+
+plugin.loadManifest = original_load_manifest
+plugin.saveManifest = original_save_manifest
+
 local separator = string.char(31)
 local unchanged = {
     title = "Dune",

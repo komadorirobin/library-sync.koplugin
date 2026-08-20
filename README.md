@@ -148,7 +148,9 @@ Select `All books (default)` before a full-library refresh.
 <library>/.library-sync-trash/
 ```
 
-Only files previously tracked by Library Sync for the same server and sync source are moved. Other local files are left untouched, and the currently open book is skipped. The trash folder is ignored by future local scans.
+It also moves older manifest-tracked duplicate files when multiple local paths point to the same stable server book ID. The current download-profile path is kept when available; otherwise the most recently tracked copy is kept. Other local files are left untouched, and the currently open book is skipped. The trash folder is ignored by future local scans.
+
+Library Sync matches manifest-tracked books by stable server ID before comparing filenames. Changing a BookOrbit title, subtitle, volume formatting, or source filename therefore does not make an existing tracked book appear missing. Metadata refresh replaces the existing local path and does not rename it automatically.
 
 ## Usage
 
