@@ -993,4 +993,46 @@ local matches, needs_migration = plugin:metadataSignatureMatches({ signature = p
 assert(matches == true)
 assert(needs_migration == true)
 
+assert(plugin:normalizeMetadataDescription(
+    "<p>Arrakis &amp; spice</p><p>Second line<br>continued</p>"
+) == "Arrakis & spice Second line continued")
+
+local old_html_signature = table.concat({
+    unchanged.title,
+    unchanged.author,
+    unchanged.series,
+    unchanged.series_index,
+    unchanged.hardcover_id,
+    unchanged.hardcover_book_id,
+    "",
+    "<p>Arrakis</p>",
+    unchanged.genres[1],
+}, separator)
+local html_matches, html_needs_migration = plugin:metadataSignatureMatches({
+    signature = old_html_signature,
+}, unchanged)
+assert(html_matches == true)
+assert(html_needs_migration == true)
+
+local changed_description = {
+    title = unchanged.title,
+    author = unchanged.author,
+    series = unchanged.series,
+    series_index = unchanged.series_index,
+    hardcover_id = unchanged.hardcover_id,
+    hardcover_book_id = unchanged.hardcover_book_id,
+    description = "Caladan",
+    genres = unchanged.genres,
+}
+local changed_matches, changed_needs_migration = plugin:metadataSignatureMatches({
+    signature = old_html_signature,
+}, changed_description)
+assert(changed_matches == false)
+assert(changed_needs_migration == false)
+
+local migrated_description_entry = { signature = old_html_signature }
+plugin:migrateManifestSignature(migrated_description_entry, unchanged)
+assert(migrated_description_entry.signature == plugin:remoteMetadataSignature(unchanged))
+assert(not migrated_description_entry.signature:match("<p>"))
+
 print("provider contract tests passed")

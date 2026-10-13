@@ -104,6 +104,38 @@ local BOOKORBIT_MATCH_BATCH_SIZE = 100
 local BOOKORBIT_RECONCILE_HASH_BATCH_SIZE = 25
 local SYNC_BOOK_EXTENSIONS = { epub = true, cbz = true }
 local LOCAL_BOOK_EXTENSIONS = { epub = true, cbz = true, pdf = true, mobi = true, azw3 = true }
+local DESCRIPTION_BLOCK_ELEMENTS = {
+    address = true,
+    article = true,
+    aside = true,
+    blockquote = true,
+    div = true,
+    dl = true,
+    fieldset = true,
+    figcaption = true,
+    figure = true,
+    footer = true,
+    form = true,
+    h1 = true,
+    h2 = true,
+    h3 = true,
+    h4 = true,
+    h5 = true,
+    h6 = true,
+    header = true,
+    hr = true,
+    li = true,
+    main = true,
+    nav = true,
+    ol = true,
+    p = true,
+    pre = true,
+    section = true,
+    table = true,
+    tr = true,
+    ul = true,
+    br = true,
+}
 local SIGNATURE_SEPARATOR = "\31"
 local ABORTED = "aborted"
 local SERVER_GRIMMORY = "grimmory"
@@ -3550,6 +3582,48 @@ function GrimmorySync:manifestKeyForPath(path)
     return path or ""
 end
 
+function GrimmorySync:normalizeMetadataDescription(value)
+    value = tostring(value or "")
+    if value == "" then return "" end
+
+    local function stripMarkup(text)
+        return text:gsub("<([^>]*)>", function(tag)
+            local name = tag:match("^%s*/?%s*([%a%d]+)")
+            if name and DESCRIPTION_BLOCK_ELEMENTS[name:lower()] then
+                return " "
+            end
+            return ""
+        end)
+    end
+
+    value = stripMarkup(value)
+    value = xmlDecode(value) or value
+    value = value:gsub("&([%a]+);", function(name)
+        local replacements = {
+            nbsp = " ",
+            ndash = "-",
+            mdash = "-",
+            hellip = "...",
+            lsquo = "'",
+            rsquo = "'",
+            ldquo = '"',
+            rdquo = '"',
+        }
+        return replacements[name:lower()] or ("&" .. name .. ";")
+    end)
+    value = stripMarkup(value)
+    value = value:gsub("\194\160", " ")
+        :gsub("\226\128\152", "'")
+        :gsub("\226\128\153", "'")
+        :gsub("\226\128\156", '"')
+        :gsub("\226\128\157", '"')
+        :gsub("\226\128\147", "-")
+        :gsub("\226\128\148", "-")
+        :gsub("\226\128\166", "...")
+        :gsub("%s+", " ")
+    return trim(value)
+end
+
 function GrimmorySync:metadataSignatureParts(remote)
     local genres = {}
     for _, genre in ipairs(remote.genres or {}) do
@@ -3567,7 +3641,7 @@ function GrimmorySync:metadataSignatureParts(remote)
     parts[#parts + 1] = remote.hardcover_id or ""
     parts[#parts + 1] = remote.hardcover_book_id or ""
     parts[#parts + 1] = remote.hardcover_edition_id or ""
-    parts[#parts + 1] = remote.description or ""
+    parts[#parts + 1] = self:normalizeMetadataDescription(remote.description)
     parts[#parts + 1] = table.concat(genres, "|")
 
     return parts
@@ -3741,6 +3815,15 @@ function GrimmorySync:stableSignatureWithEditionFromPriorCurrent(signature)
     }, SIGNATURE_SEPARATOR)
 end
 
+function GrimmorySync:signatureWithNormalizedDescription(signature)
+    local parts = self:splitMetadataSignature(signature)
+    if #parts ~= 9 then
+        return nil
+    end
+    parts[8] = self:normalizeMetadataDescription(parts[8])
+    return table.concat(parts, SIGNATURE_SEPARATOR)
+end
+
 function GrimmorySync:metadataSignatureMatches(manifest_entry, remote)
     if not manifest_entry or type(manifest_entry.signature) ~= "string" then
         return false, false
@@ -3751,15 +3834,18 @@ function GrimmorySync:metadataSignatureMatches(manifest_entry, remote)
         return true, false
     end
 
-    if self:stableSignatureFromLegacy(manifest_entry.signature) == current_signature then
+    if self:signatureWithNormalizedDescription(manifest_entry.signature) == current_signature then
         return true, true
     end
 
-    if self:stableSignatureFromPreviousStable(manifest_entry.signature) == current_signature then
-        return true, true
+    local function migratedSignatureMatches(signature)
+        return signature == current_signature
+            or self:signatureWithNormalizedDescription(signature) == current_signature
     end
 
-    if self:stableSignatureWithEditionFromPriorCurrent(manifest_entry.signature) == current_signature then
+    if migratedSignatureMatches(self:stableSignatureFromLegacy(manifest_entry.signature))
+        or migratedSignatureMatches(self:stableSignatureFromPreviousStable(manifest_entry.signature))
+        or migratedSignatureMatches(self:stableSignatureWithEditionFromPriorCurrent(manifest_entry.signature)) then
         return true, true
     end
 

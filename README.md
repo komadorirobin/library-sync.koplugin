@@ -189,6 +189,8 @@ The first metadata refresh records the current state in `library_sync_manifest.l
 
 When configured API metadata cannot be loaded completely, metadata refresh stops before replacing local files instead of comparing a degraded OPDS-only state with previously enriched signatures. An unusually large manual refresh queue requires a second confirmation with exact counts.
 
+Description comparisons use normalized text, so a server switching between equivalent HTML and plain-text descriptions does not replace otherwise unchanged book files. Actual description text changes are still detected.
+
 The currently open book is skipped. To refresh one EPUB or CBZ file, long-press it in KOReader's file browser and choose `Refresh server metadata`. To refresh the open book, use `Refresh open book metadata`; Library Sync will ask before closing it.
 
 ## SimpleUI Actions
