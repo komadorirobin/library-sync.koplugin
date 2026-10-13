@@ -319,6 +319,45 @@ assert(plugin:isSyncBookPath("/library/Manga.cbz") == true)
 assert(plugin:isSyncBookPath("/library/Book.epub") == true)
 assert(plugin:isSyncBookPath("/library/Document.pdf") == false)
 
+assert(plugin:contentDispositionFilename({
+    ["Content-Disposition"] = 'attachment; filename="Server Book.epub"',
+}) == "Server Book.epub")
+assert(plugin:contentDispositionFilename({
+    ["content-disposition"] = "attachment; FILENAME*=utf-8''Manga%20Volume%201.cbz",
+}) == "Manga Volume 1.cbz")
+
+local response_named_epub = { file_extension = "epub" }
+assert(plugin:downloadPathFromResponse(
+    response_named_epub,
+    nil,
+    "/library/Fallback.epub",
+    "/library",
+    { ["content-disposition"] = 'attachment; filename="Server Book.epub"' }
+) == "/library/Server Book.epub")
+assert(plugin:downloadPathFromResponse(
+    response_named_epub,
+    "/library/Existing.epub",
+    "/library/Existing.epub",
+    "/library",
+    { ["content-disposition"] = 'attachment; filename="Renamed.epub"' }
+) == "/library/Existing.epub")
+assert(plugin:downloadPathFromResponse(
+    response_named_epub,
+    nil,
+    "/library/Fallback.epub",
+    "/library",
+    { ["content-disposition"] = 'attachment; filename="Wrong.pdf"' }
+) == "/library/Fallback.epub")
+
+local response_named_cbz = { file_extension = "cbz" }
+assert(plugin:downloadPathFromResponse(
+    response_named_cbz,
+    nil,
+    "/library/Fallback.cbz",
+    "/library",
+    { ["content-disposition"] = 'attachment; filename="Server Manga.cbz"' }
+) == "/library/Server Manga.cbz")
+
 local root_feed = [[
 <feed>
   <entry>

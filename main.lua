@@ -289,22 +289,35 @@ local function responseHeader(headers, name)
     return nil
 end
 
-local function contentDispositionFilename(headers)
+local function contentDispositionParameter(header, name)
+    if type(header) ~= "string" then return nil end
+
+    local lower = header:lower()
+    local pattern = tostring(name or ""):lower():gsub("([^%w])", "%%%1") .. "%s*=%s*"
+    local parameter_start, value_start = lower:find(pattern)
+    if not value_start then return nil end
+
+    local remainder = trim(header:sub(value_start + 1))
+    if remainder:sub(1, 1) == '"' then
+        return remainder:match('^"([^\"]*)"')
+    end
+    local value = remainder:match("^([^;]+)")
+    return value and trim(value) or nil
+end
+
+function GrimmorySync:contentDispositionFilename(headers)
     local header = responseHeader(headers, "content-disposition")
     if not header then return nil end
 
-    local star = header:match("filename%*%s*=%s*UTF%-8''([^;]+)")
+    local star = contentDispositionParameter(header, "filename*")
     if star then
-        return urlDecode(star)
+        local encoded = star:match("^[^']*'[^']*'(.*)$") or star
+        return encoded:gsub("%%(%x%x)", function(hex)
+            return string.char(tonumber(hex, 16))
+        end)
     end
 
-    local quoted = header:match('filename%s*=%s*"([^"]+)"')
-    if quoted then return quoted end
-
-    local plain = header:match("filename%s*=%s*([^;]+)")
-    if plain then return trim(plain) end
-
-    return nil
+    return contentDispositionParameter(header, "filename")
 end
 
 local function resolveRedirectUrl(current_url, location)
@@ -6665,6 +6678,38 @@ function GrimmorySync:buildCalibrePath(book)
     return full_path, self.local_path, filename
 end
 
+function GrimmorySync:downloadPathFromResponse(book, target_path, full_path, dir_path, response_headers)
+    -- An explicit target is an in-place metadata refresh; keep its stable local path.
+    if target_path and target_path ~= "" then
+        return full_path
+    end
+    if self.filename_profile ~= FILENAME_PROFILE_GRIMMORY
+        or self.server_type ~= SERVER_BOOKORBIT then
+        return full_path
+    end
+
+    local server_filename = self:sanitizeFilename(self:contentDispositionFilename(response_headers))
+    if not server_filename or server_filename == "" then
+        return full_path
+    end
+
+    local expected_extension = self:bookFileExtension(book)
+    local server_extension = self:bookExtensionForPath(server_filename)
+    if server_extension ~= expected_extension then
+        logger.warn(
+            "[GrimmorySync] Ignoring Content-Disposition filename with unexpected format:",
+            server_filename,
+            "expected:",
+            expected_extension,
+            "got:",
+            server_extension or "none"
+        )
+        return full_path
+    end
+
+    return dir_path .. "/" .. server_filename
+end
+
 function GrimmorySync:downloadBook(book, target_path, options)
     options = options or {}
 
@@ -6770,9 +6815,7 @@ function GrimmorySync:downloadBook(book, target_path, options)
     end
     
     local tmp_path = full_path .. ".grimmorytmp"
-    local backup_path = full_path .. ".grimmorybak"
     pcall(os.remove, tmp_path)
-    pcall(os.remove, backup_path)
 
     -- Open a temporary file first so failed downloads do not corrupt the existing book.
     local file = io.open(tmp_path, "wb")
@@ -6837,6 +6880,34 @@ function GrimmorySync:downloadBook(book, target_path, options)
         return false
     end
 
+    local adjusted_path = self:downloadPathFromResponse(
+        book,
+        target_path,
+        full_path,
+        dir_path,
+        response_headers
+    )
+    if adjusted_path ~= full_path then
+        if lfs.attributes(adjusted_path) then
+            pcall(os.remove, tmp_path)
+            logger.info(
+                "[GrimmorySync] Server-named file already exists; keeping it unchanged:",
+                adjusted_path
+            )
+            self:queueBookOrbitRegistration(adjusted_path, book)
+            return true, adjusted_path
+        end
+        logger.info(
+            "[GrimmorySync] Using filename from Content-Disposition:",
+            full_path,
+            "->",
+            adjusted_path
+        )
+        full_path = adjusted_path
+    end
+
+    local backup_path = full_path .. ".grimmorybak"
+    pcall(os.remove, backup_path)
     local existing_attr = lfs.attributes(full_path)
     if existing_attr then
         local ok_rename, rename_err = os.rename(full_path, backup_path)
@@ -6859,46 +6930,6 @@ function GrimmorySync:downloadBook(book, target_path, options)
 
     if existing_attr then
         pcall(os.remove, backup_path)
-    end
-
-    -- Correct the on-disk filename to match BookOrbit's actual server
-    -- filename (read from Content-Disposition), since relying on the
-    -- separately-fetched "primaryFile.fileName" via the Book API can
-    -- silently fall back to "Title - Author" when that lookup fails for
-    -- a given book (see preferredDownloadFilename's GRIMMORY branch, and
-    -- the README's own "BookOrbit falls back to Title - Author.<ext>"
-    -- note under Download File Naming).
-    if self.filename_profile == FILENAME_PROFILE_GRIMMORY
-        and self.server_type == SERVER_BOOKORBIT then
-        local server_filename = contentDispositionFilename(response_headers)
-        if server_filename and server_filename ~= "" then
-            local sanitized_server_filename = self:sanitizeFilename(server_filename)
-            local current_filename = full_path:match("([^/]+)$")
-            if sanitized_server_filename
-                and sanitized_server_filename ~= current_filename then
-                local corrected_path = dir_path .. "/" .. sanitized_server_filename
-                if not lfs.attributes(corrected_path) then
-                    local ok_fix, fix_err = os.rename(full_path, corrected_path)
-                    if ok_fix then
-                        logger.info(
-                            "[GrimmorySync] Corrected filename from Content-Disposition:",
-                            full_path, "->", corrected_path
-                        )
-                        full_path = corrected_path
-                    else
-                        logger.warn(
-                            "[GrimmorySync] Could not apply Content-Disposition filename:",
-                            corrected_path, fix_err or "unknown"
-                        )
-                    end
-                else
-                    logger.warn(
-                        "[GrimmorySync] Content-Disposition filename already exists, skipping correction:",
-                        corrected_path
-                    )
-                end
-            end
-        end
     end
 
     -- The final path now contains the verified bytes. Hash it while the sync

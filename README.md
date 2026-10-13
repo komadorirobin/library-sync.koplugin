@@ -122,7 +122,7 @@ Custom rules may match `genre`/`genres`, `tag`/`tags`, `author`/`authors`, or us
 
 `Download file naming` controls names for newly downloaded files:
 
-- `Server file name`: use Grimmory's original filename when available. BookOrbit falls back to `Title - Author.<ext>`.
+- `Server file name`: use Grimmory's original filename when available. For BookOrbit, Library Sync also reads the filename returned with the download; it falls back to `Title - Author.<ext>` only when no server filename is available.
 - `Library Sync default`: use `Author, Firstname - Title.<ext>`.
 - `Calibre title-authors`: use `Title - Authors.<ext>`.
 
