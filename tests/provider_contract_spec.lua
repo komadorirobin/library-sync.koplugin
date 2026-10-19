@@ -153,11 +153,53 @@ end
 
 assert(Providers.get("grimmory").opds_root == "/api/v1/opds")
 assert(Providers.get("grimmory").api_credentials_separate == true)
+assert(Providers.get("grimmory").sync_sources[1].endpoint == "/api/v1/opds/libraries")
+assert(Providers.get("grimmory").sync_sources[1].kind == "library")
 assert(Providers.get("bookorbit").book_api.endpoint == "/api/v1/books/query")
 assert(Providers.get("bookorbit").api_credentials_separate == true)
 assert(Providers.get("bookorbit").api_fallback_to_opds_credentials == true)
 assert(Providers.get("bookorbit").author_upload_api.endpoint:match("hasPhoto") == nil)
 assert(Providers.get("bookorbit").author_image_upload_path(17) == "/api/v1/authors/17/image")
+
+local grimmory_library_feed = [[
+<feed>
+  <entry>
+    <title>eBooks &amp; More</title>
+    <id>urn:booklore:library:7</id>
+    <link rel="subsection" href="/api/v1/opds/catalog?libraryId=7&amp;page=0" type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+  </entry>
+</feed>
+]]
+plugin.server_type = "grimmory"
+plugin.makeRequest = function(_, endpoint)
+    if endpoint == "/api/v1/opds/libraries" then
+        return grimmory_library_feed, nil
+    end
+    return nil, "HTTP 404"
+end
+local grimmory_sources = assert(plugin:fetchSyncSources())
+assert(#grimmory_sources == 1)
+assert(grimmory_sources[1].label == "[Library] eBooks & More")
+assert(grimmory_sources[1].href == "/api/v1/opds/catalog?libraryId=7&page=0")
+
+local grimmory_shelf_feed = [[
+<feed>
+  <entry>
+    <title>Kids</title>
+    <link rel="subsection" href="/api/v1/opds/catalog?shelfId=4" type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+  </entry>
+</feed>
+]]
+plugin.makeRequest = function(_, endpoint)
+    if endpoint == "/api/v1/opds/shelves" then
+        return grimmory_shelf_feed, nil
+    end
+    return nil, "HTTP 404"
+end
+local legacy_grimmory_sources = assert(plugin:fetchSyncSources())
+assert(#legacy_grimmory_sources == 1)
+assert(legacy_grimmory_sources[1].label == "Kids")
+assert(legacy_grimmory_sources[1].href == "/api/v1/opds/catalog?shelfId=4")
 
 local redirected, redirect_err = plugin:httpRequest("http://redirect.example.com/api/v1/auth/login", {
     method = "POST",

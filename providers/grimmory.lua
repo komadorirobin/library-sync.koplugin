@@ -14,6 +14,7 @@ return {
         paginated = false,
     },
     sync_sources = {
+        { endpoint = "/api/v1/opds/libraries", kind = "library" },
         { endpoint = "/api/v1/opds/shelves", kind = "shelf" },
         { endpoint = "/api/v1/opds/magic-shelves", kind = "magic" },
     },
