@@ -1,0 +1,17 @@
+name: Tests and release packages
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        lua: [lua5.1, luajit]
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y lua5.1 luajit
+      - run: ${{ matrix.lua }} tests/provider_contract_spec.lua
+      - run: luac5.1 -p _meta.lua main.lua grimmory_updater.lua providers/*.lua examples/path_rules.lua
+      - run: python3 scripts/package.py
+      - run: cd dist && sha256sum --check *.sha256

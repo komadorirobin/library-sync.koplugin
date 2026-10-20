@@ -2,7 +2,14 @@
 
 ## 1. Copy the plugin
 
-Copy the complete `library-sync.koplugin` directory to KOReader's plugin directory:
+**From Storefront or AppStore:** search for `library-sync.koplugin` and choose the
+entry owned by `komadorirobin`. Install the latest stable release. If asked to
+choose a file, use `library-sync.koplugin.zip` for a new installation.
+
+**Manually:** download `library-sync.koplugin.zip` from
+[GitHub Releases](https://github.com/komadorirobin/library-sync.koplugin/releases/latest),
+not the source archive. Extract the complete `library-sync.koplugin` directory to
+KOReader's plugin directory:
 
 ```text
 <koreader>/plugins/library-sync.koplugin/
@@ -19,6 +26,12 @@ The files must be directly inside that directory, not inside a second nested dir
 `<koreader>` is KOReader's user storage directory on the device.
 
 Existing installations may still use `<koreader>/plugins/grimmory-sync.koplugin/`. That legacy directory name is supported for OTA updates. Do not keep both `library-sync.koplugin` and `grimmory-sync.koplugin` installed at the same time.
+For legacy installations, use the plugin's own **Check for updates** action;
+it selects `grimmory-sync.koplugin.zip` to retain the existing directory.
+
+Bookshelf, OrbitUI, SimpleUI and BookOrbit's KOReader plugin are not required for
+downloading and refreshing books. Library Sync does require a reachable Grimmory
+or BookOrbit server; it does not supply books or support every generic OPDS server.
 
 ## 2. Restart KOReader
 
@@ -74,3 +87,8 @@ KOReader's log is normally located at:
 ```
 
 Search for `[GrimmorySync]`, `grimmorysync`, or `library_sync`; some internal identifiers retain the old Grimmory name for compatibility.
+
+When reporting a problem, include the plugin, KOReader and server versions and
+relevant log lines. Remove passwords, tokens, private server URLs and personal
+book metadata first. Settings contain plain-text credentials: do not attach the
+settings file to a public issue.

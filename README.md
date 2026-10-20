@@ -1,6 +1,31 @@
 # Library Sync for KOReader
 
-Library Sync mirrors EPUB books, CBZ comics, and metadata from a Grimmory or BookOrbit server into a local KOReader library. It scans local files, compares them with a selected OPDS catalogue, downloads missing books, and can safely replace existing EPUB or CBZ files when server metadata changes.
+**Bring your server library to your e-reader, without downloading every book by hand.**
+
+Library Sync downloads missing EPUB books and CBZ manga/comics from **Grimmory or
+BookOrbit** into a local KOReader library. Choose a whole library or a smaller
+shelf/collection, organize the files your way, and refresh them when server
+metadata changes.
+
+**Works with ordinary KOReader. Bookshelf, OrbitUI and SimpleUI are optional.**
+You need a supported server and OPDS credentials, not a particular home screen,
+Android device, folder layout or language.
+
+[Download the latest release](https://github.com/komadorirobin/library-sync.koplugin/releases/latest)
+| [Installation guide](INSTALL.md)
+| [Report a problem](https://github.com/komadorirobin/library-sync.koplugin/issues)
+
+## Is this for you?
+
+Use Library Sync if you want to keep selected server books available locally,
+avoid repeatedly downloading existing files, and control where new EPUB/CBZ files
+are placed. The default mode downloads missing books; **Mirror and automatic
+metadata refresh are opt-in**.
+
+It is not a general-purpose client for every OPDS server, a manga downloader from
+online reading sites, or a reading-progress/highlight synchronization service.
+For BookOrbit progress sync, use its official KOReader plugin alongside Library
+Sync. Neither plugin requires OrbitUI.
 
 The plugin was previously distributed as `grimmory-sync.koplugin`. New installations should use `library-sync.koplugin`; existing `grimmory-sync.koplugin` installations remain supported for OTA updates and settings migration. Do not install both directories at the same time.
 
@@ -42,7 +67,15 @@ The reconciliation reads Library Sync's manifest, hashes only files that are not
 
 ## Installation
 
-Copy the complete plugin directory to:
+**Storefront / AppStore:** search for **library-sync.koplugin** or **Library Sync**
+and choose **komadorirobin**'s entry. Install the latest stable release. If asked
+to choose an asset, select **library-sync.koplugin.zip** for a new installation.
+Both stores discover the repository automatically; their README view uses this
+page. Listing does not imply testing or endorsement by the store authors.
+
+**Manual installation:** download **library-sync.koplugin.zip** from
+[Releases](https://github.com/komadorirobin/library-sync.koplugin/releases/latest),
+not GitHub's source archive. Extract the complete plugin directory to:
 
 ```text
 <koreader>/plugins/library-sync.koplugin/
@@ -57,6 +90,8 @@ providers/
 ```
 
 Legacy upgrades may still live in `<koreader>/plugins/grimmory-sync.koplugin/`. That is supported, but new manual installs should use the Library Sync directory name.
+For an existing legacy installation, prefer its built-in **Check for updates**;
+it chooses the legacy ZIP automatically. Do not install the new directory beside it.
 
 Restart KOReader. The plugin appears under:
 
