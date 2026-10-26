@@ -137,6 +137,8 @@ BookOrbit uses two separate account types:
 
 Missing-book sync and basic metadata refresh work with OPDS credentials alone. Users who authenticate to BookOrbit exclusively through OIDC may need a local BookOrbit password before the optional API features can be used.
 
+Library Sync normally downloads files through OPDS. If BookOrbit returns HTTP 409 for an advertised EPUB, Library Sync retries that file through BookOrbit's authenticated file API. This fallback requires the normal BookOrbit account credentials and permission to download books. Failed downloads are reported explicitly, and Mirror cleanup is skipped after an incomplete sync.
+
 Credentials are stored as plain text in KOReader's platform-specific `settings/` directory. Use the plugin on a trusted device and network.
 
 ## Download Folder Profiles

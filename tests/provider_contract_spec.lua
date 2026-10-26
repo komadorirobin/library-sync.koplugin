@@ -320,6 +320,36 @@ local fallback_token, fallback_err = plugin:loginToServerApi()
 assert(fallback_token == "opds-token", tostring(fallback_err))
 assert(#fallback_login_attempts == 2)
 
+assert(plugin:bookOrbitApiDownloadEndpoint({ book_file_id = "3084" })
+    == "/api/v1/books/files/3084/download")
+assert(plugin:bookOrbitApiDownloadEndpoint({ book_file_id = "not-a-number" }) == nil)
+local original_login_to_server_api = plugin.loginToServerApi
+local original_download_to_temporary_file = plugin.downloadToTemporaryFile
+local captured_fallback_url
+local captured_fallback_headers
+local captured_fallback_path
+plugin.bookorbit_download_token = nil
+plugin.loginToServerApi = function()
+    return "download-token", nil
+end
+plugin.downloadToTemporaryFile = function(_, url, headers, tmp_path)
+    captured_fallback_url = url
+    captured_fallback_headers = headers
+    captured_fallback_path = tmp_path
+    return true, nil, 200, { ["content-type"] = "application/epub+zip" }
+end
+local api_download_ok, api_download_err = plugin:downloadBookFromBookOrbitApi(
+    { book_file_id = "3084" },
+    "/tmp/library-sync-download-test.epub"
+)
+assert(api_download_ok == true, tostring(api_download_err))
+assert(captured_fallback_url == "https://books.example.com/api/v1/books/files/3084/download")
+assert(captured_fallback_headers.authorization == "Bearer download-token")
+assert(captured_fallback_path == "/tmp/library-sync-download-test.epub")
+plugin.loginToServerApi = original_login_to_server_api
+plugin.downloadToTemporaryFile = original_download_to_temporary_file
+plugin.bookorbit_download_token = nil
+
 plugin.routing_profile = "genre_series"
 local routing_ok, routing_err = plugin:validateDownloadRoutingMetadata({ { title = "No genres", genres = {} } }, "HTTP 401")
 assert(routing_ok == false)

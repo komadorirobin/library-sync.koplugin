@@ -5645,20 +5645,27 @@ function GrimmorySync:metadataRefreshMessage(stats, result, image_ok, image_resu
     result = result or {}
 
     local title
-    if (result.refreshed or 0) == 0 then
+    if (result.failed or 0) > 0 then
+        title = _("Metadata refresh incomplete.")
+    elseif (result.refreshed or 0) == 0 then
         title = _("Metadata already up to date.")
     else
         title = _("Metadata updated.")
     end
 
     local message = string.format(
-        _("%s\n\nLocal: %d books\nServer: %d books\nUpdated: %d books\nSkipped: %d books"),
+        _("%s\n\nLocal: %d books\nServer: %d books\nUpdated: %d books\nSkipped: %d books\nFailed: %d books"),
         title,
         stats.local_count or 0,
         stats.remote_count or 0,
         result.refreshed or 0,
-        result.skipped or 0
+        result.skipped or 0,
+        result.failed or 0
     )
+
+    if (result.failed or 0) > 0 and result.last_error then
+        message = message .. "\n" .. string.format(_("Latest error: %s"), tostring(result.last_error))
+    end
 
     if (result.skipped_open or 0) > 0 then
         message = message .. string.format(
@@ -6478,11 +6485,13 @@ end
 function GrimmorySync:downloadMissingBooksAsync(missing, manifest, done_callback)
     local total = #missing
     local count = 0
+    local failed = 0
+    local last_error
     local i = 0
     manifest = manifest or self:loadManifest()
 
     if total == 0 then
-        done_callback(true, { downloaded = 0, remaining = 0 })
+        done_callback(true, { downloaded = 0, failed = 0, remaining = 0 })
         return
     end
 
@@ -6503,7 +6512,9 @@ function GrimmorySync:downloadMissingBooksAsync(missing, manifest, done_callback
             finish(false, {
                 error = ABORTED,
                 downloaded = count,
-                remaining = total - count,
+                failed = failed,
+                last_error = last_error,
+                remaining = math.max(total - count - failed, 0),
             })
             return
         end
@@ -6512,19 +6523,27 @@ function GrimmorySync:downloadMissingBooksAsync(missing, manifest, done_callback
         if i > total then
             finish(true, {
                 downloaded = count,
+                failed = failed,
+                last_error = last_error,
                 remaining = 0,
             })
             return
         end
 
         local book = missing[i]
-        self:showProgressDialog(string.format(
-            _("Downloading book %d of %d...\n\n%s\n\nDownloaded: %d\n\nTap Cancel to stop after the current file."),
+        local progress = string.format(
+            _("Downloading book %d of %d...\n\n%s\n\nDownloaded: %d\nFailed: %d"),
             i,
             total,
             book.title,
-            count
-        ))
+            count,
+            failed
+        )
+        if last_error then
+            progress = progress .. "\n" .. string.format(_("Latest error: %s"), tostring(last_error))
+        end
+        progress = progress .. "\n\n" .. _("Tap Cancel to stop after the current file.")
+        self:showProgressDialog(progress)
 
         if UIManager.forceRePaint then
             pcall(function() UIManager:forceRePaint() end)
@@ -6536,13 +6555,16 @@ function GrimmorySync:downloadMissingBooksAsync(missing, manifest, done_callback
                 return
             end
 
-            local downloaded, path = self:downloadBook(book)
+            local downloaded, path, download_err = self:downloadBook(book)
             if downloaded then
                 count = count + 1
                 if path then
                     self:storeManifestEntry(manifest, path, book)
                     self:saveManifest(manifest)
                 end
+            else
+                failed = failed + 1
+                last_error = download_err or _("Unknown download error")
             end
 
             UIManager:scheduleIn(PROGRESS_STEP_DELAY_S, step)
@@ -6671,12 +6693,14 @@ function GrimmorySync:refreshExistingMetadataAsync(matched, skipped, manifest, d
     options = options or {}
     local total = #matched
     local count = 0
+    local failed = 0
+    local last_error
     local i = 0
     local skipped_open = 0
     manifest = manifest or self:loadManifest()
 
     if total == 0 then
-        done_callback(true, { refreshed = 0, skipped = skipped or 0, remaining = 0 })
+        done_callback(true, { refreshed = 0, failed = 0, skipped = skipped or 0, remaining = 0 })
         return
     end
 
@@ -6697,9 +6721,11 @@ function GrimmorySync:refreshExistingMetadataAsync(matched, skipped, manifest, d
             finish(false, {
                 error = ABORTED,
                 refreshed = count,
+                failed = failed,
+                last_error = last_error,
                 skipped = skipped or 0,
                 skipped_open = skipped_open,
-                remaining = total - count,
+                remaining = math.max(total - count - failed - skipped_open, 0),
             })
             return
         end
@@ -6708,6 +6734,8 @@ function GrimmorySync:refreshExistingMetadataAsync(matched, skipped, manifest, d
         if i > total then
             finish(true, {
                 refreshed = count,
+                failed = failed,
+                last_error = last_error,
                 skipped = skipped or 0,
                 skipped_open = skipped_open,
                 remaining = 0,
@@ -6724,14 +6752,20 @@ function GrimmorySync:refreshExistingMetadataAsync(matched, skipped, manifest, d
         end
 
         if not options.silent then
-            self:showProgressDialog(string.format(
-                _("Refreshing metadata %d of %d...\n\n%s\n\nUpdated: %d\nSkipped unchanged: %d\n\nTap Cancel to stop after the current file."),
+            local progress = string.format(
+                _("Refreshing metadata %d of %d...\n\n%s\n\nUpdated: %d\nSkipped unchanged: %d\nFailed: %d"),
                 i,
                 total,
                 item.remote.title,
                 count,
-                skipped or 0
-            ))
+                skipped or 0,
+                failed
+            )
+            if last_error then
+                progress = progress .. "\n" .. string.format(_("Latest error: %s"), tostring(last_error))
+            end
+            progress = progress .. "\n\n" .. _("Tap Cancel to stop after the current file.")
+            self:showProgressDialog(progress)
         end
 
         UIManager:scheduleIn(options.silent and 0.1 or PROGRESS_STEP_DELAY_S, function()
@@ -6740,11 +6774,18 @@ function GrimmorySync:refreshExistingMetadataAsync(matched, skipped, manifest, d
                 return
             end
 
-            local downloaded = self:downloadBook(item.remote, item.local_path, { record_history = false })
+            local downloaded, ignored_path, download_err = self:downloadBook(
+                item.remote,
+                item.local_path,
+                { record_history = false }
+            )
             if downloaded then
                 count = count + 1
                 self:storeManifestEntry(manifest, item.local_path, item.remote)
                 self:saveManifest(manifest)
+            else
+                failed = failed + 1
+                last_error = download_err or _("Unknown download error")
             end
 
             UIManager:scheduleIn(options.silent and 0.1 or PROGRESS_STEP_DELAY_S, step)
@@ -6796,22 +6837,142 @@ function GrimmorySync:downloadPathFromResponse(book, target_path, full_path, dir
     return dir_path .. "/" .. server_filename
 end
 
-function GrimmorySync:downloadBook(book, target_path, options)
-    options = options or {}
-
+function GrimmorySync:downloadToTemporaryFile(download_url, headers, tmp_path)
     local ok_http, http = pcall(require, "socket.http")
     local ok_https, https = pcall(require, "ssl.https")
-    local ok_ltn12, ltn12 = pcall(require, "ltn12")
-    
-    if not ok_http or not ok_ltn12 then
-        logger.err("[GrimmorySync] Cannot load HTTP libraries")
-        return false
+
+    if not ok_http then
+        return false, _("Cannot load HTTP libraries")
     end
+
+    pcall(os.remove, tmp_path)
+    local file = io.open(tmp_path, "wb")
+    if not file then
+        return false, string.format(_("Cannot create temporary download file: %s"), tmp_path)
+    end
+
+    local file_closed = false
+    local function closeFile()
+        if not file_closed then
+            file:close()
+            file_closed = true
+        end
+    end
+    local function abortableSink(chunk, err)
+        if self.abort_sync then
+            closeFile()
+            return nil, ABORTED
+        end
+        if chunk then
+            local ok_write, write_err = file:write(chunk)
+            if not ok_write then
+                closeFile()
+                return nil, write_err
+            end
+        elseif err then
+            closeFile()
+            return nil, err
+        else
+            closeFile()
+        end
+        return 1
+    end
+
+    local request_func = download_url:match("^https://")
+        and (ok_https and https.request or http.request)
+        or http.request
+    local success, status_code, response_headers = request_func{
+        url = download_url,
+        sink = abortableSink,
+        headers = headers or {},
+    }
+    closeFile()
+
+    local status_num = tonumber(status_code)
+    if not success then
+        pcall(os.remove, tmp_path)
+        return false,
+            string.format(_("Connection failed: %s"), tostring(status_code or _("unknown error"))),
+            status_code,
+            response_headers
+    end
+    if status_num and (status_num < 200 or status_num >= 300) then
+        pcall(os.remove, tmp_path)
+        return false,
+            string.format(_("HTTP %s"), tostring(status_code)),
+            status_code,
+            response_headers
+    end
+    if self.abort_sync then
+        pcall(os.remove, tmp_path)
+        return false, ABORTED, status_code, response_headers
+    end
+
+    return true, nil, status_code, response_headers
+end
+
+function GrimmorySync:bookOrbitApiDownloadEndpoint(book)
+    if self.server_type ~= SERVER_BOOKORBIT or type(book) ~= "table" then
+        return nil
+    end
+    local file_id = tostring(book.book_file_id or "")
+    if not file_id:match("^%d+$") then
+        return nil
+    end
+    return "/api/v1/books/files/" .. file_id .. "/download"
+end
+
+function GrimmorySync:downloadBookFromBookOrbitApi(book, tmp_path)
+    local endpoint = self:bookOrbitApiDownloadEndpoint(book)
+    if not endpoint then
+        return false, _("BookOrbit file ID is unavailable for API fallback.")
+    end
+
+    local last_error
+    local last_status
+    local last_headers
+    for attempt = 1, 2 do
+        local token = self.bookorbit_download_token
+        if not token or token == "" then
+            local login_err
+            token, login_err = self:loginToServerApi()
+            if not token then
+                return false, string.format(
+                    _("BookOrbit API login failed: %s"),
+                    tostring(login_err or _("unknown error"))
+                )
+            end
+            self.bookorbit_download_token = token
+        end
+
+        local ok, err, status_code, response_headers = self:downloadToTemporaryFile(
+            self:buildServerUrl(endpoint),
+            self:apiAuthHeaders(token),
+            tmp_path
+        )
+        if ok then
+            return true, nil, status_code, response_headers
+        end
+
+        last_error = err
+        last_status = status_code
+        last_headers = response_headers
+        if tonumber(status_code) ~= 401 or attempt == 2 then
+            break
+        end
+        self.bookorbit_download_token = nil
+    end
+
+    return false, last_error, last_status, last_headers
+end
+
+function GrimmorySync:downloadBook(book, target_path, options)
+    options = options or {}
     
     local ok_lfs, lfs = pcall(require, "libs/libkoreader-lfs")
     if not ok_lfs then
         logger.err("[GrimmorySync] Cannot load lfs")
-        return false
+        return false, nil, _("Cannot load filesystem library")
     end
     
     logger.info("[GrimmorySync] Downloading:", book.title)
@@ -6881,12 +7042,12 @@ function GrimmorySync:downloadBook(book, target_path, options)
             "got:",
             target_extension or "none"
         )
-        return false
+        return false, nil, _("Refusing download because the publication format does not match the target file.")
     end
 
     -- Create directories
     if not ensureDir(dir_path) then
-        return false
+        return false, nil, string.format(_("Could not create destination folder: %s"), dir_path)
     end
     
     -- Prepare download URL
@@ -6901,61 +7062,42 @@ function GrimmorySync:downloadBook(book, target_path, options)
     end
     
     local tmp_path = full_path .. ".grimmorytmp"
-    pcall(os.remove, tmp_path)
+    local success, download_err, status_code, response_headers = self:downloadToTemporaryFile(
+        download_url,
+        headers,
+        tmp_path
+    )
 
-    -- Open a temporary file first so failed downloads do not corrupt the existing book.
-    local file = io.open(tmp_path, "wb")
-    if not file then
-        logger.err("[GrimmorySync] Cannot create:", tmp_path)
-        return false
-    end
-    local file_closed = false
-    local function closeFile()
-        if not file_closed then
-            file:close()
-            file_closed = true
-        end
-    end
-    local function abortableSink(chunk, err)
-        if self.abort_sync then
-            closeFile()
-            return nil, "aborted"
-        end
-        if chunk then
-            local ok_write, write_err = file:write(chunk)
-            if not ok_write then
-                closeFile()
-                return nil, write_err
-            end
-        elseif err then
-            closeFile()
-            return nil, err
+    if not success and self.server_type == SERVER_BOOKORBIT and tonumber(status_code) == 409 then
+        logger.warn(
+            "[GrimmorySync] BookOrbit OPDS download returned HTTP 409; trying authenticated file API:",
+            book.title
+        )
+        local fallback_ok, fallback_err, fallback_status, fallback_headers =
+            self:downloadBookFromBookOrbitApi(book, tmp_path)
+        if fallback_ok then
+            success = true
+            download_err = nil
+            status_code = fallback_status
+            response_headers = fallback_headers
+            logger.info("[GrimmorySync] BookOrbit API fallback succeeded:", book.title)
         else
-            closeFile()
+            download_err = string.format(
+                _("OPDS download failed with HTTP 409; BookOrbit API fallback failed: %s"),
+                tostring(fallback_err or _("unknown error"))
+            )
         end
-        return 1
     end
-    
-    -- Download using appropriate protocol
-    local request_func = download_url:match("^https://") and (ok_https and https.request or http.request) or http.request
-    
-    local success, status_code, response_headers = request_func{
-        url = download_url,
-        sink = abortableSink,
-        headers = headers,
-    }
-    closeFile()
-    
-    -- Check result
-    if not success or (type(status_code) == "number" and status_code ~= 200) then
-        logger.err("[GrimmorySync] Download failed:", status_code or "unknown error")
+
+    if not success then
+        logger.err("[GrimmorySync] Download failed:", download_err or status_code or "unknown error")
         pcall(os.remove, tmp_path)
-        return false
+        return false, nil, download_err or string.format(_("HTTP %s"), tostring(status_code or _("unknown error")))
     end
     if self.abort_sync then
         logger.info("[GrimmorySync] Download aborted by user")
         pcall(os.remove, tmp_path)
-        return false
+        return false, nil, ABORTED
     end
     
     -- Verify file was created and has content
@@ -6963,7 +7105,7 @@ function GrimmorySync:downloadBook(book, target_path, options)
     if not attr or attr.size == 0 then
         logger.err("[GrimmorySync] Downloaded file is empty or missing")
         pcall(os.remove, tmp_path)
-        return false
+        return false, nil, _("Downloaded file is empty or missing")
     end
 
     local adjusted_path = self:downloadPathFromResponse(
@@ -7000,7 +7142,10 @@ function GrimmorySync:downloadBook(book, target_path, options)
         if not ok_rename then
             logger.err("[GrimmorySync] Cannot backup existing file:", full_path, "error:", rename_err or "unknown")
             pcall(os.remove, tmp_path)
-            return false
+            return false, nil, string.format(
+                _("Cannot back up existing file: %s"),
+                tostring(rename_err or _("unknown error"))
+            )
         end
     end
 
@@ -7011,7 +7156,10 @@ function GrimmorySync:downloadBook(book, target_path, options)
             pcall(os.rename, backup_path, full_path)
         end
         pcall(os.remove, tmp_path)
-        return false
+        return false, nil, string.format(
+            _("Cannot move downloaded file into place: %s"),
+            tostring(replace_err or _("unknown error"))
+        )
     end
 
     if existing_attr then
@@ -7429,6 +7577,18 @@ function GrimmorySync:performAutomaticMetadataRefresh(reason)
             self:finishAutomaticMetadataRefresh(false, {
                 error = result.error or _("unknown error"),
                 refreshed = result.refreshed or 0,
+                failed = result.failed or 0,
+                skipped = result.skipped or 0,
+                skipped_open = result.skipped_open or 0,
+            })
+            return
+        end
+
+        if (result.failed or 0) > 0 then
+            self:finishAutomaticMetadataRefresh(false, {
+                error = result.last_error or _("One or more book downloads failed."),
+                refreshed = result.refreshed or 0,
+                failed = result.failed or 0,
                 skipped = result.skipped or 0,
                 skipped_open = result.skipped_open or 0,
             })
@@ -7857,8 +8017,9 @@ function GrimmorySync:performSync()
             if result.error == ABORTED then
                 UIManager:show(InfoMessage:new{
                     text = string.format(
-                        _("Sync canceled.\n\nDownloaded: %d books\nRemaining: %d books"),
+                        _("Sync canceled.\n\nDownloaded: %d books\nFailed: %d books\nRemaining: %d books"),
                         result.downloaded or 0,
+                        result.failed or 0,
                         result.remaining or 0
                     ),
                     timeout = 5,
@@ -7870,6 +8031,26 @@ function GrimmorySync:performSync()
                 })
                 logger.err("[GrimmorySync] Error:", result.error)
             end
+            self.sync_running = false
+            return
+        end
+
+        if (result.failed or 0) > 0 then
+            if (result.downloaded or 0) > 0 then
+                self:refreshFileBrowserContent()
+            end
+            local message = string.format(
+                _("Sync incomplete.\n\nDownloaded: %d books\nFailed: %d books\n\nMirror cleanup was skipped."),
+                result.downloaded or 0,
+                result.failed or 0
+            )
+            if result.last_error then
+                message = message .. "\n" .. string.format(_("Latest error: %s"), tostring(result.last_error))
+            end
+            UIManager:show(InfoMessage:new{
+                text = message,
+                timeout = 10,
+            })
             self.sync_running = false
             return
         end
@@ -8064,8 +8245,9 @@ function GrimmorySync:performMetadataRefreshForFile(file_path)
             if result.error == ABORTED then
                 UIManager:show(InfoMessage:new{
                     text = string.format(
-                        _("Metadata refresh canceled.\n\nUpdated: %d books"),
-                        result.refreshed or 0
+                        _("Metadata refresh canceled.\n\nUpdated: %d books\nFailed: %d books"),
+                        result.refreshed or 0,
+                        result.failed or 0
                     ),
                     timeout = 5,
                 })
@@ -8080,7 +8262,24 @@ function GrimmorySync:performMetadataRefreshForFile(file_path)
             return
         end
 
-        if (result.refreshed or 0) > 0 then
+        if (result.failed or 0) > 0 then
+            if (result.refreshed or 0) > 0 then
+                self:refreshFileBrowserContent()
+            end
+            local message = string.format(
+                _("Metadata refresh incomplete.\n\n%s\n\nUpdated: %d books\nFailed: %d books"),
+                stats.target_name or target_name,
+                result.refreshed or 0,
+                result.failed or 0
+            )
+            if result.last_error then
+                message = message .. "\n" .. string.format(_("Latest error: %s"), tostring(result.last_error))
+            end
+            UIManager:show(InfoMessage:new{
+                text = message .. self:apiMetadataWarning(stats.api_error),
+                timeout = 10,
+            })
+        elseif (result.refreshed or 0) > 0 then
             self:refreshFileBrowserContent()
             local message = string.format(
                 _("Metadata refreshed.\n\n%s"),
@@ -8250,8 +8449,9 @@ function GrimmorySync:performMetadataRefresh()
                 if result.error == ABORTED then
                     UIManager:show(InfoMessage:new{
                         text = string.format(
-                            _("Metadata refresh canceled.\n\nUpdated: %d books\nRemaining: %d books"),
+                            _("Metadata refresh canceled.\n\nUpdated: %d books\nFailed: %d books\nRemaining: %d books"),
                             result.refreshed or 0,
+                            result.failed or 0,
                             result.remaining or 0
                         ),
                         timeout = 5,
