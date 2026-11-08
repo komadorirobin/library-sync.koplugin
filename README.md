@@ -65,7 +65,7 @@ Library Sync -> BookOrbit integration -> Register existing Library Sync books
 
 The reconciliation reads Library Sync's manifest, hashes only files that are not already registered unchanged, and batches the BookOrbit state update. Exact BookOrbit book and file IDs from OPDS are preferred; older manifest entries can fall back to BookOrbit's match endpoint when necessary.
 
-### BookOrbit downloads using Library Sync rules (development, not released)
+### BookOrbit downloads using Library Sync rules (0.7.6; opt-in)
 
 An optional **OFF-by-default** setting under **Library Sync → BookOrbit integration →
 Use Library Sync file rules for BookOrbit downloads** applies the existing folder
@@ -101,10 +101,11 @@ Library Sync, not the folder/name controls in BookOrbit's download sheet.
 English/Swedish controls and errors are included. Headless contracts pass with
 the frozen official download, bulk, sheet and path-containment methods; network,
 filesystem, widgets and actual transfers are mocked. Physical Bigme download,
-restart, cancellation and resume tests remain outstanding. No device installation
-or public release has been performed for this development change.
+restart, cancellation and resume tests remain outstanding. The feature is
+experimental and disabled by default; updating Library Sync does not install or
+modify the BookOrbit plugin.
 
-**Svenska:** Den nya funktionen är ännu inte publicerad och är avstängd som
+**Svenska:** Funktionen ingår från 0.7.6, är experimentell och avstängd som
 standard. Aktivera **Library Sync → BookOrbit integration → Använd Library Syncs
 filregler för BookOrbit-nedladdningar**. Samma mapp- och filnamnsregler används då
 för nya EPUB/CBZ-filer från samma BookOrbit-server, även i förhandsvisningen och

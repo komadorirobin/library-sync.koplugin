@@ -79,9 +79,9 @@ Include the following when reporting a problem:
 - Whether all-books sync or a restricted sync source was selected
 - Approximate local and remote library sizes
 
-## Development: BookOrbit file-rule adapter
+## BookOrbit file-rule adapter (0.7.6; opt-in)
 
-The opt-in adapter is local development code, not part of a published release.
+The opt-in adapter is experimental and disabled by default.
 Its menu, help and owned errors support English and Swedish. Do not edit the
 BookOrbit plugin's files or set KOReader's global `download_dir` as a workaround.
 Compare the two server URLs, selected Library Sync provider, folder and filename
@@ -125,5 +125,7 @@ actual native collision/skip behavior, edition changes (including deferred
 callbacks, multiple sheet lifetimes and closing before a pending callback) and
 already-on-device skips. Both canonical and legacy ZIPs contain the same 12
 runtime/documentation files with bytes verified against the working source.
-Version remains 0.7.4 for private development packaging only; no release/tag,
-push, CI result, server change or device installation is claimed.
+The initial private development packaging used version 0.7.4. Release 0.7.6 also
+includes the already published 0.7.5 BookOrbit HTTP-409 fallback and incomplete-
+sync/Mirror protections. Device installation and physical acceptance are still
+outstanding; a public release does not imply either.
