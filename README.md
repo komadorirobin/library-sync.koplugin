@@ -65,6 +65,55 @@ Library Sync -> BookOrbit integration -> Register existing Library Sync books
 
 The reconciliation reads Library Sync's manifest, hashes only files that are not already registered unchanged, and batches the BookOrbit state update. Exact BookOrbit book and file IDs from OPDS are preferred; older manifest entries can fall back to BookOrbit's match endpoint when necessary.
 
+### BookOrbit downloads using Library Sync rules (development, not released)
+
+An optional **OFF-by-default** setting under **Library Sync → BookOrbit integration →
+Use Library Sync file rules for BookOrbit downloads** applies the existing folder
+and file-naming profiles to new EPUB/CBZ downloads started in BookOrbit's own
+catalogue. Single downloads, their destination preview and bulk downloads use
+the same Library Sync rules. While enabled, change the folder/naming profile in
+Library Sync, not the folder/name controls in BookOrbit's download sheet.
+
+- Requires both plugins enabled, BookOrbit selected/configured in Library Sync,
+  and matching server addresses. Other servers and non-EPUB/CBZ formats retain
+  BookOrbit's normal routing.
+- Reviewed against BookOrbit plugin **2.1.0** (server tag **3.6.0**) and **2.2.0**
+  (server tag **3.7.0**). This is an in-memory compatibility adapter, not a
+  modification to BookOrbit's installed files. Unknown plugin versions or
+  detected hook conflicts block managed downloads rather than silently bypassing
+  the rules. This is not a promise of compatibility with every future release.
+- BookOrbit still owns transfer verification, its existing replace/skip/collision
+  handling, local linking and progress sync. No server patch, additional web
+  login, global KOReader download-folder change or new sync writer is introduced.
+- Folder rules using genres/tags need those fields. Missing fields or invalid
+  custom rules stop the managed download with an explanation; an empty genre/tag
+  list supplied by the server is valid. Bulk manifests omit these fields, so
+  category-dependent profiles fetch the current book's details, one book at a
+  time inside the native bulk flow. Flat/author profiles do not add these calls.
+- Server-file-name mode uses the selected file's advertised name/device-path
+  basename. If none is available it asks you to choose another naming profile;
+  it does not guess a path. Custom rules use the same helpers/category merging
+  as Library Sync, with strict error and path checks.
+- Existing books are not moved, and opening/reading status is not changed by
+  the adapter. Downloads are not automatically enrolled in Library Sync's Mirror
+  manifest; its normal scan/matching workflow remains separate.
+
+English/Swedish controls and errors are included. Headless contracts pass with
+the frozen official download, bulk, sheet and path-containment methods; network,
+filesystem, widgets and actual transfers are mocked. Physical Bigme download,
+restart, cancellation and resume tests remain outstanding. No device installation
+or public release has been performed for this development change.
+
+**Svenska:** Den nya funktionen är ännu inte publicerad och är avstängd som
+standard. Aktivera **Library Sync → BookOrbit integration → Använd Library Syncs
+filregler för BookOrbit-nedladdningar**. Samma mapp- och filnamnsregler används då
+för nya EPUB/CBZ-filer från samma BookOrbit-server, även i förhandsvisningen och
+vid massnedladdning. BookOrbit sköter fortfarande själva hämtningen och kopplingen
+till sin lässynk. Befintliga böcker flyttas inte och inga globala mappinställningar
+ändras. Saknad metadata, regelproblem och okända pluginversioner ger ett tydligt
+stopp i stället för en reservmapp. Inget servertillägg behövs. Verifiering på den
+fysiska Bigmen återstår.
+
 ## Installation
 
 **Storefront / AppStore:** search for **library-sync.koplugin** or **Library Sync**

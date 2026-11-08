@@ -7,7 +7,7 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 FILES = [
-    "_meta.lua", "main.lua", "grimmory_updater.lua", "README.md", "INSTALL.md", "DEBUG.md",
+    "_meta.lua", "main.lua", "bookorbit_routing.lua", "grimmory_updater.lua", "README.md", "INSTALL.md", "DEBUG.md",
     "LICENSE", "examples/path_rules.lua", "providers/init.lua",
     "providers/bookorbit.lua", "providers/grimmory.lua",
 ]

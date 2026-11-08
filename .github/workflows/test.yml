@@ -12,6 +12,8 @@ jobs:
       - uses: actions/checkout@v4
       - run: sudo apt-get update && sudo apt-get install -y lua5.1 luajit
       - run: ${{ matrix.lua }} tests/provider_contract_spec.lua
-      - run: luac5.1 -p _meta.lua main.lua grimmory_updater.lua providers/*.lua examples/path_rules.lua
+      - run: ${{ matrix.lua }} tests/bookorbit_routing_spec.lua
+      - run: python3 scripts/verify-bookorbit-routing.py --lua ${{ matrix.lua }}
+      - run: luac5.1 -p _meta.lua main.lua bookorbit_routing.lua grimmory_updater.lua providers/*.lua examples/path_rules.lua
       - run: python3 scripts/package.py
       - run: cd dist && sha256sum --check *.sha256

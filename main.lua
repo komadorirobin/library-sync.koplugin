@@ -737,6 +737,7 @@ function GrimmorySync:loadSettings()
             routing_profile = ROUTING_PROFILE_FLAT,
             path_rules_file = DEFAULT_PATH_RULES_FILE,
             filename_profile = FILENAME_PROFILE_GRIMMORY,
+            bookorbit_download_rules = false,
             selected_feed = "",
             selected_feed_label = "",
             mirror_selected_sync_source = false,
@@ -811,6 +812,7 @@ function GrimmorySync:loadSettings()
         routing_profile = routing_profile,
         path_rules_file = settings.path_rules_file or DEFAULT_PATH_RULES_FILE,
         filename_profile = filename_profile,
+        bookorbit_download_rules = settingToBool(settings.bookorbit_download_rules, false),
         selected_feed = settings.selected_feed or "",
         selected_feed_label = settings.selected_feed_label or "",
         mirror_selected_sync_source = settingToBool(settings.mirror_selected_sync_source, false),
@@ -842,6 +844,7 @@ function GrimmorySync:saveSettings()
     file:write("routing_profile=" .. (self.routing_profile or ROUTING_PROFILE_FLAT) .. "\n")
     file:write("path_rules_file=" .. (self.path_rules_file or DEFAULT_PATH_RULES_FILE) .. "\n")
     file:write("filename_profile=" .. (self.filename_profile or FILENAME_PROFILE_SYNC_DEFAULT) .. "\n")
+    file:write("bookorbit_download_rules=" .. boolToSetting(self.bookorbit_download_rules == true) .. "\n")
     file:write("selected_feed=" .. (self.selected_feed or "") .. "\n")
     file:write("selected_feed_label=" .. (self.selected_feed_label or "") .. "\n")
     file:write("mirror_selected_sync_source=" .. boolToSetting(self.mirror_selected_sync_source == true) .. "\n")
@@ -1117,6 +1120,7 @@ function GrimmorySync:init()
     self.routing_profile = settings.routing_profile
     self.path_rules_file = settings.path_rules_file
     self.filename_profile = settings.filename_profile
+    self.bookorbit_download_rules = settings.bookorbit_download_rules == true
     self.selected_feed = settings.selected_feed or ""
     self.selected_feed_label = settings.selected_feed_label or ""
     self.mirror_selected_sync_source = settings.mirror_selected_sync_source == true
@@ -1132,6 +1136,11 @@ function GrimmorySync:init()
         self:saveSettings()
     end
     self:configureAutomaticMetadataRefresh()
+    if self.bookorbit_download_rules then
+        local Routing = require("bookorbit_routing")
+        Routing.install(self)
+        UIManager:nextTick(function() Routing.install(self) end)
+    end
 end
 
 function GrimmorySync:provider()
@@ -1475,7 +1484,35 @@ function GrimmorySync:getBookshelfIntegrationMenu()
 end
 
 function GrimmorySync:getBookOrbitIntegrationMenu()
+    local Routing = require("bookorbit_routing")
     return {
+        {
+            text = Routing.text("Use Library Sync file rules for BookOrbit downloads", "Använd Library Syncs filregler för BookOrbit-nedladdningar"),
+            checked_func = function() return self.bookorbit_download_rules == true end,
+            callback = function()
+                if not self.bookorbit_download_rules then
+                    if self.server_type ~= SERVER_BOOKORBIT or self:serverBaseUrl() == "" then
+                        UIManager:show(InfoMessage:new{ text = Routing.text("Configure a BookOrbit server in Library Sync first.", "Konfigurera en BookOrbit-server i Library Sync först.") })
+                        return
+                    end
+                    self.bookorbit_download_rules = true
+                    local ok, err = Routing.status(self)
+                    if not ok then
+                        self.bookorbit_download_rules = false
+                        UIManager:show(InfoMessage:new{ text = err })
+                        return
+                    end
+                else
+                    self.bookorbit_download_rules = false
+                end
+                self:saveSettings()
+            end,
+            hold_callback = function()
+                UIManager:show(InfoMessage:new{ text = Routing.text(
+                    "Applies this plugin's folder and naming rules to new EPUB/CBZ downloads in the matching BookOrbit server. BookOrbit still downloads and links the files. Existing books are not moved. Other formats and servers are unchanged. Requires BookOrbit plugin 2.1.0 or 2.2.0.",
+                    "Använder detta plugins mapp- och filnamnsregler för nya EPUB/CBZ-nedladdningar från samma BookOrbit-server. BookOrbit hämtar och kopplar fortfarande filerna. Befintliga böcker flyttas inte. Andra format och servrar påverkas inte. Kräver BookOrbit-plugin 2.1.0 eller 2.2.0.") })
+            end,
+        },
         {
             text = _("Register existing Library Sync books"),
             callback = function(touchmenu_instance)
@@ -3079,9 +3116,10 @@ function GrimmorySync:ruleValueMatches(candidates, values)
     return false
 end
 
-function GrimmorySync:customRuleMatches(rule, book, helpers)
+function GrimmorySync:customRuleMatches(rule, book, helpers, strict)
     if type(rule.when) == "function" then
         local ok, result = pcall(rule.when, book, helpers)
+        if strict and not ok then error(result, 0) end
         return ok and result == true
     end
 
@@ -3109,12 +3147,12 @@ function GrimmorySync:customRuleMatches(rule, book, helpers)
     return true
 end
 
-function GrimmorySync:evaluateCustomRuleTable(rules, book, helpers)
+function GrimmorySync:evaluateCustomRuleTable(rules, book, helpers, strict)
     local rule_list = rules.rules or rules
     if type(rule_list) ~= "table" then return "" end
 
     for _, rule in ipairs(rule_list) do
-        if type(rule) == "table" and self:customRuleMatches(rule, book, helpers) then
+        if type(rule) == "table" and self:customRuleMatches(rule, book, helpers, strict) then
             if rule.series == true and helpers.series(book) == "" and rule.fallback then
                 return self:formatPathTemplate(rule.fallback, book, helpers)
             end

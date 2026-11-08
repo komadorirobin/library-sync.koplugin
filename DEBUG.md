@@ -8,6 +8,7 @@ Verify the exact directory structure:
 <koreader>/plugins/library-sync.koplugin/
   _meta.lua
   main.lua
+  bookorbit_routing.lua
   grimmory_updater.lua
   providers/
     init.lua
@@ -77,3 +78,52 @@ Include the following when reporting a problem:
 - Relevant `[GrimmorySync]` log lines
 - Whether all-books sync or a restricted sync source was selected
 - Approximate local and remote library sizes
+
+## Development: BookOrbit file-rule adapter
+
+The opt-in adapter is local development code, not part of a published release.
+Its menu, help and owned errors support English and Swedish. Do not edit the
+BookOrbit plugin's files or set KOReader's global `download_dir` as a workaround.
+Compare the two server URLs, selected Library Sync provider, folder and filename
+profiles first. A rule load/callback error, missing required category fields,
+unsafe path, changed settings, unsupported BookOrbit plugin version or replaced
+download hook must not silently fall back to BookOrbit's destination.
+
+Run offline fixture contracts with Lua 5.1/LuaJIT:
+
+```sh
+lua5.1 tests/provider_contract_spec.lua
+lua5.1 tests/bookorbit_routing_spec.lua
+luajit tests/provider_contract_spec.lua
+luajit tests/bookorbit_routing_spec.lua
+python3 scripts/verify-bookorbit-routing.py --lua lua5.1
+python3 scripts/verify-bookorbit-routing.py --lua luajit
+python3 scripts/package.py
+```
+
+The last two test commands download SHA-verified official source from frozen
+BookOrbit 3.6.0 / 3.7.0 revisions into ignored `test-results/` (never the runtime
+ZIP), then exercise real single/bulk/sheet/path-check methods with mocked
+network/filesystem/widgets/transfer execution. Those four source files are
+byte-identical at the two pins. These are not device timing or physical transfer
+results. Automated coverage includes shared rules/naming, previews, category
+enrichment, custom-rule failures, settings changes with usable Cancel, symlink
+and open-file protection, native collisions/skip behavior, opt-in persistence,
+other-server/format fallback and future-version/hook-conflict guards.
+
+Before release, verify on a device using separate test books: single and bulk
+EPUB/CBZ routing; preview/final/link agreement; opening the downloaded file;
+existing-file Replace/Skip and collisions; mixed PDF/EPUB choices; custom tags;
+cancellation, sleep/resume and restart with the toggle retained; integration off
+and an unrelated server. Preserve real books, settings and reading data. Unknown
+future versions require a new source review and retest before expanding support.
+
+Local verification, 2026-11-08: the existing provider contracts and 24 new
+routing cases pass with Lua 5.5 and LuaJIT; the frozen-method supplements pass
+for both source pins with both interpreters. Supplement-only branches include
+actual native collision/skip behavior, edition changes (including deferred
+callbacks, multiple sheet lifetimes and closing before a pending callback) and
+already-on-device skips. Both canonical and legacy ZIPs contain the same 12
+runtime/documentation files with bytes verified against the working source.
+Version remains 0.7.4 for private development packaging only; no release/tag,
+push, CI result, server change or device installation is claimed.
