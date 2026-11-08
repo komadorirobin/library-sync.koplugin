@@ -96,6 +96,8 @@ lua5.1 tests/provider_contract_spec.lua
 lua5.1 tests/bookorbit_routing_spec.lua
 luajit tests/provider_contract_spec.lua
 luajit tests/bookorbit_routing_spec.lua
+lua5.1 tests/updater_release_spec.lua
+luajit tests/updater_release_spec.lua
 python3 scripts/verify-bookorbit-routing.py --lua lua5.1
 python3 scripts/verify-bookorbit-routing.py --lua luajit
 python3 scripts/package.py
@@ -129,3 +131,13 @@ The initial private development packaging used version 0.7.4. Release 0.7.6 also
 includes the already published 0.7.5 BookOrbit HTTP-409 fallback and incomplete-
 sync/Mirror protections. Device installation and physical acceptance are still
 outstanding; a public release does not imply either.
+
+Release validation also reproduces an older updater defect in its no-JSON
+fallback: unescaped hyphens prevented exact ZIP-name matching, and a prefix
+match could accept a checksum sidecar. 0.7.6 escapes the complete basename and
+requires its closing quote. New parser contracts cover JSON and no-JSON paths,
+canonical/legacy installations, both asset orders and escaped URLs. The older
+published updater's normal JSON path selects the right package. If an older
+installation cannot load KOReader's JSON module, install the correctly named
+ZIP manually instead of relying on its defective fallback; published old
+release assets are not overwritten to work around that defect.

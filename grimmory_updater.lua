@@ -230,8 +230,11 @@ local function parseRelease(body)
 
     local download_url
     for _, asset_name in ipairs(ASSET_NAMES) do
-        local asset_pattern = '"browser_download_url"%s*:%s*"([^"]*'
-            .. asset_name:gsub("%.", "%%.") .. '[^"]*)"'
+        -- A hyphen is also a Lua pattern operator. Match the complete basename,
+        -- not a checksum sidecar or an unrelated ZIP encountered first.
+        local escaped_name = asset_name:gsub("([^%w])", "%%%1")
+        local asset_pattern = '"browser_download_url"%s*:%s*"([^"]*/'
+            .. escaped_name .. ')"'
         download_url = body:match(asset_pattern)
         if download_url then
             break
@@ -244,7 +247,7 @@ local function parseRelease(body)
     local notes = decodeJsonString(body:match('"body"%s*:%s*"(.-)"%s*[,}]'))
     return {
         version = tag:match("^v?(.*)$"),
-        download_url = download_url,
+        download_url = decodeJsonString(download_url),
         notes = cleanReleaseNotes(notes),
         html_url = decodeJsonString(body:match('"html_url"%s*:%s*"([^"]+)"')),
     }
